@@ -1,0 +1,9 @@
+[package]
+name    = "fem-solver"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fem-core   = { path = "../core" }
+fem-linalg = { path = "../linalg" }
+log        = { workspace = true }

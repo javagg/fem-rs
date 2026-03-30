@@ -1,0 +1,9 @@
+[package]
+name    = "fem-element"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fem-core   = { path = "../core" }
+nalgebra   = { workspace = true }
+num-traits = { workspace = true }

@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/mesh",
+    "crates/element",
+    "crates/space",
+    "crates/assembly",
+    "crates/linalg",
+    "crates/solver",
+    "crates/amg",
+    "crates/parallel",
+    "crates/io",
+    "crates/wasm",
+    "examples",
+]
+
+[workspace.dependencies]
+# shared versions — reference from crates with { workspace = true }
+nalgebra    = "0.33"
+num-traits  = "0.2"
+thiserror   = "2"
+log         = "0.4"
+rayon       = "1.10"
+serde       = { version = "1", features = ["derive"] }
+bytemuck    = { version = "1", features = ["derive"] }
+env_logger  = "0.11"
+
+[profile.release]
+opt-level   = 3
+lto         = "thin"
+codegen-units = 1
+
+[profile.release.package.fem-wasm]
+opt-level   = "s"   # size-optimize wasm

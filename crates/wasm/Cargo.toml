@@ -1,0 +1,24 @@
+[package]
+name    = "fem-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+fem-core     = { path = "../core" }
+fem-assembly = { path = "../assembly" }
+fem-solver   = { path = "../solver" }
+fem-io       = { path = "../io" }
+serde        = { workspace = true }
+
+[dependencies.wasm-bindgen]
+version  = "0.2"
+optional = true
+
+[features]
+default = ["dep:wasm-bindgen"]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O3"]

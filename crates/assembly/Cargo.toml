@@ -1,0 +1,20 @@
+[package]
+name    = "fem-assembly"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fem-core    = { path = "../core" }
+fem-mesh    = { path = "../mesh" }
+fem-element = { path = "../element" }
+fem-space   = { path = "../space" }
+fem-linalg  = { path = "../linalg" }
+nalgebra    = { workspace = true }
+
+[features]
+default  = []
+parallel = ["dep:rayon", "fem-linalg/parallel"]
+
+[dependencies.rayon]
+workspace = true
+optional  = true

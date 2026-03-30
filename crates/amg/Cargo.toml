@@ -1,0 +1,13 @@
+[package]
+name    = "fem-amg"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fem-core   = { path = "../core" }
+fem-linalg = { path = "../linalg" }
+log        = { workspace = true }
+
+[features]
+default = []
+hypre   = []          # placeholder — add hypre-sys when binding is ready

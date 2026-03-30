@@ -1,0 +1,21 @@
+[package]
+name    = "fem-linalg"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fem-core   = { path = "../core" }
+num-traits = { workspace = true }
+bytemuck   = { workspace = true }
+
+[dev-dependencies]
+# CooMatrix is used in CSR tests
+
+
+[features]
+default  = []
+parallel = ["dep:rayon"]
+
+[dependencies.rayon]
+workspace = true
+optional  = true

@@ -1,0 +1,4 @@
+[alias]
+wasm-build = "build --target wasm32-unknown-unknown -p wasm --no-default-features"
+check-all  = "check --workspace --all-features"
+test-all   = "test --workspace"

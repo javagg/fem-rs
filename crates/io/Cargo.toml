@@ -1,0 +1,13 @@
+[package]
+name    = "fem-io"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fem-core   = { path = "../core" }
+fem-mesh   = { path = "../mesh" }
+thiserror  = { workspace = true }
+
+[features]
+default = []
+hdf5    = []   # placeholder — add hdf5 crate when binding is ready
