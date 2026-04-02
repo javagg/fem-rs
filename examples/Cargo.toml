@@ -10,6 +10,10 @@ fem-linalg   = { path = "../crates/linalg" }
 fem-io       = { path = "../crates/io" }
 fem-parallel = { path = "../crates/parallel" }
 fem-ceed     = { path = "../crates/ceed" }
+fem-element  = { path = "../crates/element" }
+fem-space    = { path = "../crates/space" }
+fem-assembly = { path = "../crates/assembly" }
+fem-solver   = { path = "../crates/solver" }
 log          = { workspace = true }
 env_logger   = { workspace = true }
 
@@ -28,6 +32,34 @@ path = "par_mesh_verify.rs"
 [[example]]
 name = "ceed_mass"
 path = "ceed_mass.rs"
+
+[[example]]
+name = "ex1_poisson"
+path = "ex1_poisson.rs"
+
+[[example]]
+name = "ex2_elasticity"
+path = "ex2_elasticity.rs"
+
+[[example]]
+name = "ex5_mixed_darcy"
+path = "ex5_mixed_darcy.rs"
+
+[[example]]
+name = "ex9_dg_advection"
+path = "ex9_dg_advection.rs"
+
+[[example]]
+name = "ex10_heat_equation"
+path = "ex10_heat_equation.rs"
+
+[[example]]
+name = "ex13_eigenvalue"
+path = "ex13_eigenvalue.rs"
+
+[[example]]
+name = "ex16_nonlinear_heat"
+path = "ex16_nonlinear_heat.rs"
 
 [lib]
 name = "fem_examples"

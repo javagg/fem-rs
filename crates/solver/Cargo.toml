@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 fem-core   = { path = "../core" }
 fem-linalg = { path = "../linalg" }
+nalgebra   = { workspace = true }
 linger     = { path = "../../vendor/linger", default-features = false, features = ["rayon"] }
 log        = { workspace = true }
 thiserror  = { workspace = true }

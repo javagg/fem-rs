@@ -230,6 +230,18 @@ pub fn into_result(r: linger::SolverResult) -> SolveResult {
     }
 }
 
+pub mod block;
+pub mod eigen;
+pub mod ode;
+pub use block::{BlockSystem, BlockDiagonalPrecond, SchurComplementSolver, MinresSolver};
+pub use eigen::{lobpcg, LobpcgConfig, LobpcgSolver, EigenResult, GeneralizedEigenSolver};
+pub use ode::{
+    TimeStepper, ImplicitTimeStepper,
+    ForwardEuler, Rk4, Rk45,
+    ImplicitEuler, Sdirk2,
+    Bdf2, Bdf2State,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

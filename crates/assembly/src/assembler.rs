@@ -135,6 +135,7 @@ impl Assembler {
 
             let global_dofs: Vec<usize> =
                 space.element_dofs(e).iter().map(|&d| d as usize).collect();
+            let n_elem_dofs = global_dofs.len(); // may be n_ldofs * dim for vector spaces
             let nodes = mesh.element_nodes(e);
 
             // Geometric Jacobian (linear/affine map from first dim+1 nodes).
@@ -143,7 +144,7 @@ impl Assembler {
                 .expect("degenerate element — zero-area/volume triangle")
                 .transpose();
 
-            let mut k_elem = vec![0.0_f64; n_ldofs * n_ldofs];
+            let mut k_elem = vec![0.0_f64; n_elem_dofs * n_elem_dofs];
             phi.resize(n_ldofs, 0.0);
             grad_ref.resize(n_ldofs * dim, 0.0);
             grad_phys.resize(n_ldofs * dim, 0.0);
@@ -159,7 +160,7 @@ impl Assembler {
                 let xp = phys_coords(x0, &jac, xi, dim);
 
                 let qp = QpData {
-                    n_dofs:    n_ldofs,
+                    n_dofs:    n_elem_dofs,
                     dim,
                     weight:    w,
                     phi:       &phi,

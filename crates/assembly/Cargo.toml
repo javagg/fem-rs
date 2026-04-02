@@ -9,6 +9,7 @@ fem-mesh    = { path = "../mesh" }
 fem-element = { path = "../element" }
 fem-space   = { path = "../space" }
 fem-linalg  = { path = "../linalg" }
+fem-solver  = { path = "../solver" }
 nalgebra    = { workspace = true }
 
 [features]

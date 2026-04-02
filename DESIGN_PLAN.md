@@ -19,12 +19,24 @@
 | 9 | io | ✅ Done | 2026-03-31 | GMSH v4.1 ASCII reader + VTK .vtu XML writer; unit_cube_tet generator added to fem-mesh; 12 tests |
 | 10 | parallel | ✅ Done | 2026-03-31 | ChannelBackend (in-process multi-threading), ThreadLauncher (n-worker), GhostExchange (alltoallv + forward/reverse), NativeMpiBackend::alltoallv_bytes; 20 tests (12 thread + 8 ghost) |
 | 11 | wasm | ✅ Done | 2026-03-31 | WasmSolver (unit-square P1 Poisson, wasm-bindgen optional), assemble_constant_rhs / assemble_nodal_rhs / solve / node_coords / connectivity; 7 native tests |
+| 12 | element | ✅ Done | 2026-04-02 | Nedelec-I (TriND1, TetND1) + Raviart-Thomas RT0 (TriRT0, TetRT0); VectorReferenceElement trait; 12 tests (nodal basis, constant curl/div, divergence theorem) |
+| 13 | space + assembly | ✅ Done | 2026-04-02 | VectorH1Space (interleaved elem DOFs, block global DOFs); BlockMatrix/BlockVector; ElasticityIntegrator; MixedAssembler + PressureDivIntegrator/DivIntegrator; 8 tests |
+| 14 | assembly | ✅ Done | 2026-04-02 | SIP-DG (Symmetric Interior Penalty): InteriorFaceList, DgAssembler::assemble_sip; volume + interior face + Dirichlet boundary terms; symmetry + positive diagonal verified; 4 tests |
+| 15 | solver + assembly | ✅ Done | 2026-04-02 | NonlinearForm trait; NewtonSolver (GMRES linear solves, configurable atol/rtol/max_iter); NonlinearDiffusionForm (Picard linearisation); Dirichlet BC via elimination; 3 tests |
+| 16 | solver | ✅ Done | 2026-04-03 | ODE/time integrators: ForwardEuler, RK4, RK45 (adaptive Dormand-Prince), ImplicitEuler, SDIRK-2, BDF-2; TimeStepper + ImplicitTimeStepper traits; stiffness stability verified (λ=-1000, dt=0.1); 7 tests |
+| 17 | mesh | ✅ Done | 2026-04-03 | AMR: red refinement (Tri3→4 children), InteriorFaceList propagation, ZZ gradient-recovery error estimator, Dörfler marking; refine_uniform + refine_marked; 6 tests |
+| 18 | parallel | ✅ Done | 2026-04-03 | METIS k-way partitioning via rmetis; dual-graph builder; MetisPartitioner + partition_simplex_metis; balance + coverage verified; 4 tests |
+| 19 | mesh + space | ✅ Done | 2026-04-03 | CurvedMesh\<D\>: from_linear (P1), elevate_to_order2 (P2/Tri6) with custom map_fn; isoparametric Jacobian + reference_to_physical; area preserved; 6 tests |
+| 20 | solver | ✅ Done | 2026-04-03 | LOBPCG eigenvalue solver; GeneralizedEigenSolver trait; LobpcgSolver; handles standard + generalized A x=λBx; 1-D Laplacian eigenvalues verified; 4 tests |
+| 21 | solver + linalg | ✅ Done | 2026-04-03 | BlockSystem (2×2 saddle-point); BlockDiagonalPrecond; SchurComplementSolver (GMRES on flat system); MinresSolver; 4 tests |
+| 22 | assembly + ceed | ✅ Done | 2026-04-03 | Partial assembly (matrix-free): PAMassOperator, PADiffusionOperator (spatially varying κ), LumpedMassOperator; MatFreeOperator trait; results match assembled matrix × vector to 1e-11; 5 tests |
 
 ### Vendor submodules
 | Submodule | URL | Role |
 |-----------|-----|------|
 | `vendor/reed` | javagg/reed | libCEED analogue; bridged via `crates/ceed` |
 | `vendor/linger` | javagg/linger | Krylov solvers + AMG; drives `fem-solver` and `fem-amg` |
+| `vendor/rmetis` | javagg/rmetis | Pure-Rust METIS-compatible graph partitioner; will drive `fem-parallel` Phase 18 |
 
 ---
 
@@ -400,6 +412,267 @@ class WasmSolver {
 
 ---
 
+---
+
+## Phase 12: H(curl) and H(div) Elements
+
+**Depends on**: `element` (extends Phase 3 stubs)
+
+### Goal
+Add Nedelec (first-kind, order 1–2) and Raviart-Thomas (RT0, RT1) elements — required for Maxwell equations, Stokes, and mixed Darcy.
+
+### Modules to add
+```
+element/src/
+├── nedelec/
+│   ├── mod.rs
+│   ├── tri.rs       # Nedelec1 on triangle (6 DOFs for order 2)
+│   └── tet.rs       # Nedelec1 on tetrahedron
+└── raviart_thomas/
+    ├── mod.rs
+    ├── tri.rs       # RT0 / RT1 on triangle
+    └── tet.rs       # RT0 / RT1 on tetrahedron
+```
+
+### Acceptance criteria
+- DOF continuity: tangential (Nedelec) and normal (RT) continuity across faces
+- Commuting diagram property: `curl ∘ grad = 0` verified numerically
+- Patch test for each element type
+
+---
+
+## Phase 13: Mixed Bilinear Forms and Vector FE Spaces
+
+**Depends on**: `space`, `assembly`, Phase 12 elements
+
+### Goal
+Support mixed formulations (e.g., Stokes u∈H(div), p∈L2; Maxwell E∈H(curl), B∈H(div)).
+
+### Additions
+- `VectorH1Space`: blocked H1 for elasticity (u∈[H1]^d)
+- `HCurlSpace`: DOF manager for Nedelec elements
+- `HDivSpace`: DOF manager for RT elements
+- `MixedBilinearForm`: assembles off-diagonal coupling blocks
+- New integrators: `CurlCurlIntegrator`, `DivDivIntegrator`, `MixedScalarIntegrator`
+- `BlockMatrix` in `linalg`: 2×2 / n×n block structure for mixed systems
+
+### Acceptance criteria
+- Stokes problem (Taylor-Hood P2/P1): divergence-free velocity to tol 1e-12
+- Mixed Darcy: exact pressure projection test
+
+---
+
+## Phase 14: DG Interior Penalty
+
+**Depends on**: `assembly`, `space` (L2Space already done)
+
+### Goal
+Discontinuous Galerkin for convection-diffusion, incompressible flow.
+
+### Additions in `assembly`
+```
+assembly/src/
+└── dg/
+    ├── face_assembler.rs     # iterate interior + boundary faces
+    ├── dg_diffusion.rs       # SIP / NIP / IIP penalty terms
+    ├── dg_convection.rs      # upwind flux
+    └── dg_integrator.rs      # FaceIntegrator trait
+```
+
+### Acceptance criteria
+- SIP-DG convergence on smooth Poisson: P1 rate ≥ 2, P2 rate ≥ 3
+- Penalty parameter auto-selection (C_IP from inverse estimates)
+- Works with L2Space P0/P1/P2
+
+---
+
+## Phase 15: Nonlinear Forms and Newton Solver
+
+**Depends on**: `assembly`, `solver`
+
+### Goal
+Nonlinear PDE support: nonlinear diffusion, hyperelasticity, Navier-Stokes.
+
+### Additions
+- `NonlinearForm` trait: `compute_residual(u, r)`, `compute_jacobian(u, J)`
+- `NewtonSolver`: line-search Newton with pluggable linear solver
+- `NonlinearDiffusionIntegrator`: ∫ κ(u) ∇u·∇v dx
+- `HyperelasticIntegrator`: neo-Hookean / Saint Venant-Kirchhoff models
+
+### Acceptance criteria
+- Nonlinear Poisson (p-Laplacian) converges in ≤ 10 Newton iterations
+- Jacobian verified by finite-difference check (relative error < 1e-6)
+
+---
+
+## Phase 16: ODE / Time Integrators
+
+**Depends on**: `assembly`, `solver`
+
+### Goal
+Time-dependent PDE: heat equation, wave equation, structural dynamics.
+
+### Additions in `solver`
+```
+solver/src/
+└── ode/
+    ├── mod.rs           # TimeStepper trait, OdeProblem
+    ├── rk_explicit.rs   # Forward Euler, RK4, RK45 (adaptive)
+    ├── sdirk.rs         # SDIRK-2/3, implicit Euler
+    └── bdf.rs           # BDF-1/2 (for stiff problems)
+```
+
+### TimeStepper trait
+```rust
+pub trait TimeStepper {
+    fn step(&mut self, t: f64, dt: f64, u: &mut Vector<f64>) -> FemResult<()>;
+}
+```
+
+### Acceptance criteria
+- Heat equation: L2 error order matches expected temporal order (RK4 → 4, BDF2 → 2)
+- SDIRK unconditionally stable on stiff ODE test (λ = -1000)
+
+---
+
+## Phase 17: Adaptive Mesh Refinement (AMR)
+
+**Depends on**: `mesh`, `space`, `assembly`
+
+### Goal
+h-refinement driven by a posteriori error estimators — foundational for production solvers.
+
+### Additions in `mesh`
+- `refine.rs`: bisection refinement for Tri3/Tet4; hanging-node registry
+- `hanging_node.rs`: constraint equations for hanging DOFs (conforming AMR)
+
+### Additions in `assembly`
+- `error_estimator.rs`: `ErrorEstimator` trait; Zienkiewicz-Zhu (ZZ) patch recovery; residual estimator
+- `marking.rs`: Dörfler/bulk marking strategy
+
+### AMR loop
+```
+solve → estimate → mark → refine → update DOFs → repeat
+```
+
+### Acceptance criteria
+- L-shaped domain: adaptive refinement achieves optimal convergence rate 1.0 (P1) vs 0.66 (uniform)
+- No hanging-node DOF constraint violation (patch test on adaptively refined mesh)
+
+---
+
+## Phase 18: Parallel Mesh Partitioning and Parallel AMR
+
+**Depends on**: Phase 10 (parallel), Phase 17 (AMR), METIS
+
+### Goal
+Complete the `fem-parallel` crate with METIS-based partitioning and distributed AMR.
+
+### Additions
+- `partition.rs`: METIS binding via `metis-sys` crate; k-way partitioning
+- `par_mesh.rs`: `ParallelMesh` distributing `SimplexMesh` across MPI ranks
+- `par_assembly.rs`: parallel assembly loop with ghost exchange (uses existing GhostExchange)
+- `par_amg.rs`: parallel AMG — either native (aggregate across ranks) or BoomerAMG via hypre feature
+
+### Acceptance criteria
+- 4-rank Poisson: solution matches serial reference (max diff < 1e-12)
+- Weak scaling: 4 ranks × 250K DOFs within 20% of 1 rank × 250K DOFs
+- METIS partitioning: edge-cut < 1.5× random partitioning edge-cut
+
+---
+
+## Phase 19: High-Order Curved Meshes
+
+**Depends on**: `mesh`, `element`
+
+### Goal
+Geometry represented as a FE field (isoparametric mapping) — needed for high-order accuracy on curved domains.
+
+### Additions
+- `curved.rs` in `mesh`: `CurvedMesh<D, Order>` stores node DOF field alongside topology
+- Update `Jacobian` computation in assembly: use isoparametric mapping instead of affine
+- Mesh-quality check: detect inverted curved elements
+
+### Acceptance criteria
+- Circle/sphere domain: P2 geometry + P2 solution achieves O(h^3) L2 convergence
+- Jacobian always positive inside each element (verified by sampling)
+
+---
+
+## Phase 20: Eigenvalue Solvers
+
+**Depends on**: `linalg`, `solver`, `assembly`
+
+### Goal
+Structural vibration modes, buckling, electromagnetic cavity modes.
+
+### Additions in `solver`
+```
+solver/src/
+└── eigen/
+    ├── lobpcg.rs        # Locally Optimal Block Preconditioned CG
+    └── arpack.rs        # ARPACK binding (feature = "arpack")
+```
+
+### `GeneralizedEigenSolver` trait
+```rust
+pub trait EigenSolver {
+    /// Solve K x = λ M x, return (eigenvalues, eigenvectors)
+    fn solve(&mut self, k: &CsrMatrix<f64>, m: &CsrMatrix<f64>, n_eigs: usize)
+        -> FemResult<(Vec<f64>, Vec<Vector<f64>>)>;
+}
+```
+
+### Acceptance criteria
+- 2D square membrane: first 6 eigenvalues match analytical within 0.5%
+- LOBPCG convergence in ≤ 50 iterations with AMG preconditioner
+
+---
+
+## Phase 21: Block Solvers and Saddle-Point Systems
+
+**Depends on**: `linalg`, `solver`, Phase 13 (mixed forms)
+
+### Goal
+Efficient solvers for mixed/saddle-point problems (Stokes, Darcy, incompressible elasticity).
+
+### Additions in `linalg`
+- `block_matrix.rs`: `BlockMatrix<T>` — indexable 2D block structure wrapping `CsrMatrix`
+- `block_vector.rs`: `BlockVector<T>` — contiguous split into named blocks
+
+### Additions in `solver`
+- `schur.rs`: Schur complement preconditioner P = [[A, 0], [B A^{-1} B^T, S]]
+- `block_precond.rs`: block-diagonal, block-triangular preconditioners
+
+### Acceptance criteria
+- Stokes (Taylor-Hood): block-preconditioned MINRES converges in ≤ 30 iterations on 64×64 mesh
+- Condition number estimate: κ(P^{-1} K) < 10 (mesh-independent)
+
+---
+
+## Phase 22: Partial Assembly and Matrix-Free
+
+**Depends on**: `assembly`, `ceed` (fem-ceed / reed), Phase 3 elements
+
+### Goal
+High-performance high-order FEM via sum-factorization — avoids explicit matrix formation.
+
+### Approach
+- Integrate with `fem-ceed` (reed submodule) for operator application kernels
+- `PartialAssembler`: stores quadrature-point data (D-vectors) instead of full matrix
+- Sum-factorization `apply(u, v)` for tensor-product elements (QuadQ*, HexQ*)
+
+### Additions
+- `assembly/src/partial/`: `PADiffusionOperator`, `PAMassOperator`
+- `ceed/src/operator.rs`: bridge fem-assembly integrators → reed CeedOperator
+
+### Acceptance criteria
+- PA SpMV throughput ≥ 2× explicit CSR SpMV for Q2 on 100K element mesh
+- Results match assembled matrix to tol 1e-13
+- Works on CPU; CUDA/HIP backend via reed is optional stretch goal
+
+---
+
 ## Implementation Order & Parallelism
 
 ```
@@ -416,6 +689,26 @@ Phase 6  (assembly) ← Phase 8 (amg)
     ↓
 Phase 9 ──── Phase 10 ──── Phase 11    ← can be parallelized
   (io)      (parallel)     (wasm)
+
+── MFEM gap phases (new) ──────────────────────────────────────────
+Phase 12 (Nedelec / RT elements)
+    ↓
+Phase 13 (mixed forms + vector spaces) ←── also needs Phase 12
+    ↓
+Phase 14 (DG interior penalty)          ← parallel with Phase 13
+Phase 15 (nonlinear forms + Newton)     ← parallel with Phase 13
+Phase 16 (ODE time integrators)         ← parallel with Phase 13
+
+Phase 17 (AMR: h-refinement + ZZ estimator)
+    ↓
+Phase 18 (parallel mesh partitioning + par-AMR)  ← needs Phase 10 + 17
+
+Phase 19 (high-order curved meshes)     ← needs Phase 12
+
+Phase 20 (eigenvalue solvers: LOBPCG)   ← needs Phase 13
+Phase 21 (block solvers + Schur)        ← needs Phase 13
+
+Phase 22 (partial assembly / matrix-free)  ← needs Phase 12, ceed
 ```
 
 ---

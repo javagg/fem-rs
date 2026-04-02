@@ -2,8 +2,9 @@
 //!
 //! Reference finite elements, quadrature rules, and Lagrange basis functions.
 //!
-//! ## Trait
-//! [`ReferenceElement`] — implemented by every concrete element type.
+//! ## Traits
+//! - [`ReferenceElement`] — scalar-valued elements (Lagrange H1/L2).
+//! - [`VectorReferenceElement`] — vector-valued elements (H(curl), H(div)).
 //!
 //! ## Lagrange elements
 //! | Type      | Reference domain | DOFs |
@@ -15,10 +16,27 @@
 //! | [`TetP1`] | unit tet        | 4    |
 //! | [`QuadQ1`]| [-1,1]²         | 4    |
 //! | [`HexQ1`] | [-1,1]³         | 8    |
+//!
+//! ## H(curl) Nedelec elements
+//! | Type       | Reference domain | DOFs |
+//! |------------|-----------------|------|
+//! | [`TriND1`] | unit triangle   | 3    |
+//! | [`TetND1`] | unit tet        | 6    |
+//!
+//! ## H(div) Raviart-Thomas elements
+//! | Type        | Reference domain | DOFs |
+//! |-------------|-----------------|------|
+//! | [`TriRT0`]  | unit triangle   | 3    |
+//! | [`TetRT0`]  | unit tet        | 4    |
 
 pub mod reference;
 pub mod quadrature;
 pub mod lagrange;
+pub mod nedelec;
+pub mod raviart_thomas;
 
-pub use reference::{QuadratureRule, ReferenceElement};
+pub use reference::{QuadratureRule, ReferenceElement, VectorReferenceElement};
 pub use lagrange::{HexQ1, QuadQ1, SegP1, SegP2, TetP1, TriP1, TriP2};
+pub use nedelec::{TriND1, TetND1};
+pub use raviart_thomas::{TriRT0, TetRT0};
+

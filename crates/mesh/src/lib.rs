@@ -8,12 +8,16 @@
 //! - [`topology`]     — `MeshTopology` trait
 //! - [`simplex`]      — `SimplexMesh<D>`: concrete unstructured mesh with built-in generators
 
+pub mod amr;
 pub mod boundary;
+pub mod curved;
 pub mod element_type;
 pub mod simplex;
 pub mod topology;
 
+pub use amr::{refine_marked, refine_uniform, dorfler_mark, zz_estimator};
 pub use boundary::{BoundaryTag, PhysicalGroup};
+pub use curved::CurvedMesh;
 pub use element_type::ElementType;
 pub use simplex::SimplexMesh;
 pub use topology::MeshTopology;

@@ -2,7 +2,11 @@
 //!
 //! Bilinear/linear form assembly: [`Assembler`], [`BilinearIntegrator`],
 //! [`LinearIntegrator`], and standard integrators (diffusion, mass, source,
-//! Neumann).
+//! Neumann, elasticity).
+//!
+//! Also provides:
+//! - [`MixedAssembler`] — rectangular assembly for mixed bilinear forms.
+//! - [`DgAssembler`] — interior-penalty DG assembly (Phase 14).
 //!
 //! ## Quick start
 //!
@@ -23,15 +27,23 @@
 //!         2.0 * PI * PI * (PI*x[0]).sin() * (PI*x[1]).sin()
 //!     })], 3);
 //! ```
-//!
-//! Enable the `parallel` feature for rayon-parallel element loops (not yet implemented).
 
 pub mod assembler;
 pub mod integrator;
 pub mod standard;
+pub mod mixed;
+pub mod interior_faces;
+pub mod dg;
+pub mod nonlinear;
+pub mod partial;
 
 pub use assembler::{Assembler, face_dofs_p1, face_dofs_p2};
 pub use integrator::{
     BdQpData, BilinearIntegrator, BoundaryLinearIntegrator,
     LinearIntegrator, QpData,
 };
+pub use mixed::{MixedAssembler, MixedBilinearIntegrator, DivIntegrator, PressureDivIntegrator};
+pub use dg::{DgAssembler};
+pub use interior_faces::InteriorFaceList;
+pub use nonlinear::{NonlinearForm, NewtonSolver, NewtonConfig, NewtonResult};
+pub use partial::{MatFreeOperator, PAMassOperator, PADiffusionOperator, LumpedMassOperator};
