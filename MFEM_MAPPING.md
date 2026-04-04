@@ -420,9 +420,9 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 
 | MFEM example | PDE | FEM space | BCs | fem-rs milestone |
 |---|---|---|---|---|
-| **ex1** | −∇²u = 1, u=0 on ∂Ω | H¹ P1/P2 | Dirichlet | Phase 6 smoke test |
-| **ex2** | −∇²u = f, mixed BCs | H¹ P1/P2 | Dirichlet + Neumann | Phase 6: `NeumannIntegrator` |
-| **ex3** (scalar) | −∇²u + αu = f (reaction-diffusion) | H¹ P1 | Dirichlet | Phase 6: `MassIntegrator` |
+| **ex1** | −∇²u = 1, u=0 on ∂Ω | H¹ P1/P2 | Dirichlet | ✅ `ex1_poisson` O(h²) |
+| **ex2** | −∇²u = f, mixed BCs | H¹ P1/P2 | Dirichlet + Neumann | ✅ `ex2_elasticity` |
+| **ex3** (scalar) | −∇²u + αu = f (reaction-diffusion) | H¹ P1 | Dirichlet | ✅ Phase 6: `MassIntegrator` |
 | **ex13** | −∇·(ε∇φ) = 0, elasticity | H¹ vector | Mixed | Phase 6: `ElasticityIntegrator` |
 | **pex1** | Parallel Poisson | H¹ + MPI | Dirichlet | Phase 10 |
 
@@ -430,9 +430,9 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 
 | MFEM example | PDE | FEM space | fem-rs milestone |
 |---|---|---|---|
-| **ex3** (curl) | ∇×∇×**u** + **u** = **f** (Maxwell) | H(curl) Nédélec | Phase 6: `CurlCurlIntegrator` + `ND` space |
-| **ex4** | −∇·(**u**) = f, **u** = −κ∇p (Darcy) | H(div) RT + L² | Phase 6: RT space + `DivDivIntegrator` |
-| **ex5** | Saddle-point Darcy/Stokes | H(div) × L² | Phase 6: `MixedBilinearForm` |
+| **ex3** (curl) | ∇×∇×**u** + **u** = **f** (Maxwell) | H(curl) Nédélec | ✅ `ex3_maxwell` O(h) |
+| **ex4** | −∇·(**u**) = f, **u** = −κ∇p (Darcy) | H(div) RT + L² | 🔨 RT space done, full ex4 pending |
+| **ex5** | Saddle-point Darcy/Stokes | H(div) × L² | ✅ `ex5_mixed_darcy` block PGMRES |
 | **ex22** | Time-harmonic Maxwell (complex coeff.) | H(curl) | Phase 7+ |
 | **em_magnetostatics_2d** (this project) | −∇·(ν∇Az) = Jz | H¹ P1 (2D A_z) | ✅ |
 
@@ -440,19 +440,19 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 
 | MFEM example | PDE | Time method | fem-rs milestone |
 |---|---|---|---|
-| **ex9** (heat) | ∂u/∂t − ∇²u = 0 | BDF1 / Crank-Nicolson | Phase 7: `TimeIntegrator` trait |
-| **ex10** (wave) | ∂²u/∂t² − ∇²u = 0 | Leapfrog / Newmark | Phase 7+ |
-| **ex14** (DG heat) | ∂u/∂t − ∇²u + b·∇u = 0 | Explicit RK + DG | Phase 7+ |
-| **ex16** (elastodynamics) | ρ ∂²**u**/∂t² = ∇·σ | Generalized-α | Phase 7+ |
+| **ex9** (heat) | ∂u/∂t − ∇²u = 0 | BDF1 / Crank-Nicolson | ✅ `ex10_heat_equation` SDIRK-2 |
+| **ex10** (wave) | ∂²u/∂t² − ∇²u = 0 | Leapfrog / Newmark | 🔲 Phase 7+ |
+| **ex14** (DG heat) | ∂u/∂t − ∇²u + b·∇u = 0 | Explicit RK + DG | ✅ `ex9_dg_advection` SIP-DG O(h²) |
+| **ex16** (elastodynamics) | ρ ∂²**u**/∂t² = ∇·σ | Generalized-α | ✅ `ex16_nonlinear_heat` Newton |
 
 ### Tier 4 — Nonlinear & AMR (Phase 7+)
 
 | MFEM example | Problem | fem-rs milestone |
 |---|---|---|
-| **ex4** (nonlinear) | −Δu + exp(u) = 0 | Phase 7+: Newton solver |
-| **ex6** | AMR Poisson with ZZ estimator | Phase 2+: `refine.rs`, `ZZErrorEstimator` |
-| **ex15** | DG advection with AMR | Phase 6+ |
-| **ex19** | Incompressible Navier-Stokes | Phase 7+ |
+| **ex4** (nonlinear) | −Δu + exp(u) = 0 | ✅ `NewtonSolver` |
+| **ex6** | AMR Poisson with ZZ estimator | ✅ `refine_marked()`, `ZZErrorEstimator` |
+| **ex15** | DG advection with AMR | 🔲 Phase 6+ |
+| **ex19** | Incompressible Navier-Stokes | 🔲 Phase 7+ |
 
 ### Tier 5 — HPC & Parallel (Phase 10)
 
@@ -512,3 +512,4 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 | 22 | `assembly`+`ceed` | Partial assembly: PA mass/diffusion, matrix-free | ✅ |
 | 23 | `space` | HCurlSpace (Nédélec ND1), HDivSpace (RT0), element_signs | ✅ |
 | 24 | `assembly` | VectorAssembler, CurlCurlIntegrator, VectorMassIntegrator | ✅ |
+| 25 | `assembly`+`solver` | DG-SIP face normals fix, SchurComplement PGMRES, MINRES rewrite, TriND1 fix; all 8 MFEM-style examples verified | ✅ |

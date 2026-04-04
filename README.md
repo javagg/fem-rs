@@ -23,8 +23,21 @@ fem-rs/
 │   ├── io/         fem-io       — GMSH .msh v4 reader, VTK .vtu XML writer
 │   ├── wasm/       fem-wasm     — wasm-bindgen Poisson solver
 │   └── ceed/       fem-ceed     — libCEED-style partial assembly operators
-└── examples/       fem-examples — 11 runnable FEM examples
+└── examples/       fem-examples — MFEM-style examples + EM simulations
 ```
+
+### MFEM-Style Examples
+
+| Example | PDE | Method | Status |
+|---------|-----|--------|--------|
+| `ex1_poisson` | -Δu = f | H¹ P1, PCG+Jacobi | O(h²) verified |
+| `ex2_elasticity` | -∇·σ = f | VectorH1, PCG+Jacobi | Working |
+| `ex3_maxwell` | ∇×∇×E + E = f | H(curl) ND1, PCG+Jacobi | O(h) verified |
+| `ex5_mixed_darcy` | Saddle-point [A,Bᵀ;B,0] | Block GMRES | Working |
+| `ex9_dg_advection` | -Δu = f (DG) | SIP-DG P1, GMRES | O(h²) verified |
+| `ex10_heat_equation` | ∂u/∂t - Δu = 0 | SDIRK-2 + PCG | Working |
+| `ex13_eigenvalue` | Kx = λMx | LOBPCG | Working |
+| `ex16_nonlinear_heat` | -∇·(κ(u)∇u) = f | Newton + GMRES | O(h²) verified |
 
 Dependency order (each crate depends only on crates listed above it):
 `core → mesh/linalg/element → space → assembly → solver/amg → parallel/io/wasm`
@@ -277,7 +290,7 @@ See [TECHNICAL_SPEC.md](TECHNICAL_SPEC.md) for:
 - WASM target rules and JS API
 
 See [DESIGN_PLAN.md](DESIGN_PLAN.md) for:
-- Phase-by-phase implementation roadmap (Phases 0–22, all complete)
+- Phase-by-phase implementation roadmap (Phases 0–25, all complete)
 - Module-level file trees for each crate
 - Per-phase acceptance criteria and convergence tests
 
@@ -311,7 +324,7 @@ check-all  = "check --workspace --all-features"
 
 ## Implementation Status
 
-All 22 phases are complete. 206 tests passing across the workspace.
+All 25 phases are complete. 220+ tests passing across the workspace.
 
 | Crate | Status | Notes |
 |-------|--------|-------|
@@ -321,7 +334,7 @@ All 22 phases are complete. 206 tests passing across the workspace.
 | `fem-linalg` | ✅ Complete | CsrMatrix, CooMatrix, Vector, SparsityPattern, dense LU, BlockMatrix/BlockVector |
 | `fem-space` | ✅ Complete | H1Space (P1/P2), L2Space (P0/P1), VectorH1Space, HCurlSpace (Nédélec ND1), HDivSpace (Raviart-Thomas RT0), DofManager, boundary DOFs, Dirichlet BC |
 | `fem-assembly` | ✅ Complete | Assembler, Diffusion/Mass/Source/Neumann/Elasticity integrators; MixedAssembler; DG SIP; NonlinearForm + Newton; partial assembly (PA mass/diffusion, matrix-free); VectorAssembler (Piola transforms); CurlCurlIntegrator; VectorMassIntegrator |
-| `fem-solver` | ✅ Complete | CG, PCG+Jacobi/ILU0, GMRES, BiCGSTAB (via linger); ODE: ForwardEuler, RK4, RK45, ImplicitEuler, SDIRK-2, BDF-2; LOBPCG eigenvalue solver; MINRES; SchurComplement block solver |
+| `fem-solver` | ✅ Complete | CG, PCG+Jacobi/ILU0, GMRES, BiCGSTAB (via linger); ODE: ForwardEuler, RK4, RK45, ImplicitEuler, SDIRK-2, BDF-2; LOBPCG eigenvalue solver; MINRES (Choi-Paige-Saunders); SchurComplement (preconditioned GMRES + block-diagonal precond) |
 | `fem-amg` | ✅ Complete | SA-AMG + RS-AMG (via linger), reusable AmgSolver hierarchy |
 | `fem-io` | ✅ Complete | GMSH v4.1 ASCII reader, VTK .vtu XML writer, unit_cube_tet generator |
 | `fem-parallel` | ✅ Complete | ChannelBackend (multi-thread), GhostExchange, METIS k-way partitioning (pure-Rust) |
