@@ -207,6 +207,25 @@ pub fn apply_hanging_constraints(
         constraint_map.insert(c.constrained, (c.parent_a, c.parent_b));
     }
 
+    // Recursively expand a DOF into its free-DOF contributions.
+    // Handles chains: if DOF is constrained to parents that are also constrained,
+    // the expansion follows through until only free DOFs remain.
+    fn expand_dof(
+        dof: usize,
+        weight: f64,
+        constraint_map: &std::collections::HashMap<usize, (usize, usize)>,
+        out: &mut Vec<(usize, f64)>,
+        depth: usize,
+    ) {
+        if depth > 20 { return; } // safety guard against cycles
+        if let Some(&(a, b)) = constraint_map.get(&dof) {
+            expand_dof(a, weight * 0.5, constraint_map, out, depth + 1);
+            expand_dof(b, weight * 0.5, constraint_map, out, depth + 1);
+        } else {
+            out.push((dof, weight));
+        }
+    }
+
     // Build K' in COO format.
     let mut coo = CooMatrix::<f64>::new(n, n);
 
@@ -214,24 +233,18 @@ pub fn apply_hanging_constraints(
         let start = mat.row_ptr[i];
         let end = mat.row_ptr[i + 1];
 
-        // Effective row indices: if i is constrained, distribute to parents.
-        let i_targets: Vec<(usize, f64)> = if let Some(&(a, b)) = constraint_map.get(&i) {
-            vec![(a, 0.5), (b, 0.5)]
-        } else {
-            vec![(i, 1.0)]
-        };
+        // Effective row indices: recursively expand if constrained.
+        let mut i_targets: Vec<(usize, f64)> = Vec::new();
+        expand_dof(i, 1.0, &constraint_map, &mut i_targets, 0);
 
         for p in start..end {
             let j = mat.col_idx[p] as usize;
             let v = mat.values[p];
             if v.abs() < 1e-30 { continue; }
 
-            // Effective column indices: if j is constrained, distribute to parents.
-            let j_targets: Vec<(usize, f64)> = if let Some(&(a, b)) = constraint_map.get(&j) {
-                vec![(a, 0.5), (b, 0.5)]
-            } else {
-                vec![(j, 1.0)]
-            };
+            // Effective column indices: recursively expand if constrained.
+            let mut j_targets: Vec<(usize, f64)> = Vec::new();
+            expand_dof(j, 1.0, &constraint_map, &mut j_targets, 0);
 
             // Add v * alpha_i * alpha_j to K'[ii, jj] for all target pairs.
             for &(ii, ai) in &i_targets {
@@ -247,13 +260,24 @@ pub fn apply_hanging_constraints(
         coo.add(c.constrained, c.constrained, 1.0);
     }
 
-    // Build f' = P^T f.
-    for c in constraints {
-        let rc = rhs[c.constrained];
-        rhs[c.parent_a] += 0.5 * rc;
-        rhs[c.parent_b] += 0.5 * rc;
-        rhs[c.constrained] = 0.0;
+    // Build f' = P^T f — also with recursive expansion.
+    // Process in reverse topological order (constrained DOFs that depend on
+    // other constrained DOFs need those resolved first).
+    // Simpler approach: expand each constrained DOF recursively.
+    let mut new_rhs = vec![0.0_f64; n];
+    for i in 0..n {
+        if rhs[i].abs() < 1e-30 { continue; }
+        let mut targets = Vec::new();
+        expand_dof(i, 1.0, &constraint_map, &mut targets, 0);
+        for &(t, w) in &targets {
+            new_rhs[t] += w * rhs[i];
+        }
     }
+    // Zero out constrained DOF RHS.
+    for c in constraints {
+        new_rhs[c.constrained] = 0.0;
+    }
+    rhs.copy_from_slice(&new_rhs);
 
     *mat = coo.into_csr();
 }
@@ -261,12 +285,44 @@ pub fn apply_hanging_constraints(
 /// Recover hanging-node DOF values after solving.
 ///
 /// Sets `x[c] = 0.5*(x[a] + x[b])` for each hanging-node constraint.
+/// Handles chained constraints by processing in topological order:
+/// constraints whose parents are free are resolved first, then constraints
+/// whose parents are now resolved, etc.
+///
 /// Call this after the linear solve and before post-processing.
 pub fn recover_hanging_values(
     x: &mut [f64],
     constraints: &[HangingNodeConstraint],
 ) {
-    for c in constraints {
+    if constraints.is_empty() { return; }
+
+    let constrained_set: std::collections::HashSet<usize> =
+        constraints.iter().map(|c| c.constrained).collect();
+
+    // Topological sort: process constraints whose parents are NOT constrained first.
+    let mut remaining: Vec<&HangingNodeConstraint> = constraints.iter().collect();
+    let mut resolved = std::collections::HashSet::new();
+
+    // Iterate until all resolved (bounded by constraint count).
+    for _ in 0..constraints.len() + 1 {
+        let mut progress = false;
+        remaining.retain(|c| {
+            let a_free = !constrained_set.contains(&c.parent_a) || resolved.contains(&c.parent_a);
+            let b_free = !constrained_set.contains(&c.parent_b) || resolved.contains(&c.parent_b);
+            if a_free && b_free {
+                x[c.constrained] = 0.5 * (x[c.parent_a] + x[c.parent_b]);
+                resolved.insert(c.constrained);
+                progress = true;
+                false // remove from remaining
+            } else {
+                true // keep
+            }
+        });
+        if remaining.is_empty() || !progress { break; }
+    }
+
+    // Handle any remaining (shouldn't happen with valid constraints, but just in case).
+    for c in remaining {
         x[c.constrained] = 0.5 * (x[c.parent_a] + x[c.parent_b]);
     }
 }
@@ -371,6 +427,52 @@ mod tests {
         }];
         recover_hanging_values(&mut x, &constraints);
         assert!((x[2] - 4.0).abs() < 1e-14, "expected 0.5*(2+6)=4, got {}", x[2]);
+    }
+
+    #[test]
+    fn recover_hanging_values_chained() {
+        // DOF 2 = mid(0, 1), DOF 3 = mid(1, 2)
+        // DOF 2 should be recovered first since its parents are free,
+        // then DOF 3 uses the recovered DOF 2.
+        let mut x = vec![0.0, 4.0, 0.0, 0.0];
+        let constraints = vec![
+            HangingNodeConstraint { constrained: 2, parent_a: 0, parent_b: 1 },
+            HangingNodeConstraint { constrained: 3, parent_a: 1, parent_b: 2 },
+        ];
+        recover_hanging_values(&mut x, &constraints);
+        // DOF 2 = 0.5*(0 + 4) = 2
+        assert!((x[2] - 2.0).abs() < 1e-14, "expected x[2]=2, got {}", x[2]);
+        // DOF 3 = 0.5*(4 + 2) = 3
+        assert!((x[3] - 3.0).abs() < 1e-14, "expected x[3]=3, got {}", x[3]);
+    }
+
+    #[test]
+    fn apply_hanging_constraints_chained() {
+        // 6-DOF system: DOF 3 = mid(1, 2), DOF 4 = mid(2, 3).
+        // DOF 4 depends on DOF 3 which is also constrained.
+        // After expansion: DOF 4 = 0.5*(u2 + 0.5*(u1 + u2)) = 0.25*u1 + 0.75*u2.
+        let n = 6;
+        let mut coo = CooMatrix::<f64>::new(n, n);
+        for i in 0..n {
+            coo.add(i, i, 2.0);
+            if i > 0     { coo.add(i, i - 1, -1.0); }
+            if i < n - 1 { coo.add(i, i + 1, -1.0); }
+        }
+        let mut mat = coo.into_csr();
+        let mut rhs = vec![1.0; n];
+
+        let constraints = vec![
+            HangingNodeConstraint { constrained: 3, parent_a: 1, parent_b: 2 },
+            HangingNodeConstraint { constrained: 4, parent_a: 2, parent_b: 3 },
+        ];
+
+        apply_hanging_constraints(&mut mat, &mut rhs, &constraints);
+
+        // Constrained rows should be identity.
+        assert!((mat.get(3, 3) - 1.0).abs() < 1e-14);
+        assert!((mat.get(4, 4) - 1.0).abs() < 1e-14);
+        assert!((rhs[3]).abs() < 1e-14);
+        assert!((rhs[4]).abs() < 1e-14);
     }
 
     #[test]

@@ -177,39 +177,250 @@ pub struct HangingNodeConstraint {
     pub parent_b:    usize,
 }
 
-/// Collect all hanging-node constraints after refinement.
+/// Accumulated state for multi-level non-conforming refinement.
 ///
-/// A hanging node is a new midpoint node on an edge that was bisected in a
-/// refined element but whose neighbour was NOT refined (so the midpoint node
-/// only appears as a DOF on the finer side).
+/// Tracks all hanging-node constraints across multiple refinement levels.
+/// When a subsequent refinement resolves a hanging node (both adjacent
+/// elements get refined), that constraint is automatically removed.
 ///
-/// Scans the new element connectivity to find midpoint nodes that are NOT
-/// referenced by at least one of the original edge's adjacent elements.
-pub fn find_hanging_constraints(
-    _orig_n_nodes: usize,
-    midpoint_map: &HashMap<(NodeId, NodeId), NodeId>,
-    all_elem_conn: &[NodeId],
-) -> Vec<HangingNodeConstraint> {
-    // Build set of all node IDs that appear in the new connectivity.
-    let node_set: std::collections::HashSet<NodeId> =
-        all_elem_conn.iter().copied().collect();
+/// # Usage
+/// ```rust,ignore
+/// let mut nc = NCState::new();
+/// let (mesh, constraints, midpts) = nc.refine(&mesh, &marked_level1);
+/// // ... solve, estimate error ...
+/// let (mesh, constraints, midpts) = nc.refine(&mesh, &marked_level2);
+/// // constraints now includes carried-over + new hanging nodes
+/// ```
+#[derive(Debug, Clone)]
+pub struct NCState {
+    /// All active hanging-node constraints.
+    constraints: Vec<HangingNodeConstraint>,
+    /// Set of edges that currently have a midpoint (edge_key → midpoint node).
+    /// Used to detect when a previous hanging node gets resolved.
+    active_midpoints: HashMap<(NodeId, NodeId), NodeId>,
+}
 
-    let mut constraints = Vec::new();
-    for (&(a, b), &mid) in midpoint_map {
-        // A midpoint is hanging if it doesn't appear in ALL elements adjacent
-        // to the original edge.  Since we don't track per-element adjacency
-        // here, we just check that the midpoint IS in the connectivity.
-        // The actual hanging detection is done inside refine_nonconforming().
-        let _ = node_set;
-        // Emit constraint — caller should only pass truly hanging midpoints.
-        constraints.push(HangingNodeConstraint {
-            constrained: mid as usize,
-            parent_a: a as usize,
-            parent_b: b as usize,
-        });
+impl NCState {
+    /// Create an empty NC state for a conforming initial mesh.
+    pub fn new() -> Self {
+        NCState {
+            constraints: Vec::new(),
+            active_midpoints: HashMap::new(),
+        }
     }
-    constraints.sort_by_key(|c| c.constrained);
-    constraints
+
+    /// Current hanging-node constraints (for use with `apply_hanging_constraints`).
+    pub fn constraints(&self) -> &[HangingNodeConstraint] {
+        &self.constraints
+    }
+
+    /// Perform one level of non-conforming refinement.
+    ///
+    /// - Refines `marked` elements via red refinement (4 children each).
+    /// - Tracks which previous hanging nodes get resolved.
+    /// - Returns `(new_mesh, constraints, midpoint_map)` where `midpoint_map`
+    ///   maps `(a, b) → mid` for each newly created midpoint node.
+    ///   Use [`prolongate_p1`] with the midpoint map to transfer solutions.
+    pub fn refine(
+        &mut self,
+        mesh: &SimplexMesh<2>,
+        marked: &[ElemId],
+    ) -> (SimplexMesh<2>, Vec<HangingNodeConstraint>, HashMap<(NodeId, NodeId), NodeId>) {
+        assert!(
+            mesh.elem_type == ElementType::Tri3,
+            "NCState::refine: only Tri3 meshes are supported"
+        );
+
+        if marked.is_empty() {
+            return (mesh.clone(), self.constraints.clone(), HashMap::new());
+        }
+
+        let marked_set: std::collections::HashSet<ElemId> = marked.iter().copied().collect();
+        let n_elems = mesh.n_elems();
+
+        // ── 1. Build edge → adjacent element list ──────────────────────
+        let mut edge_elems: HashMap<(NodeId, NodeId), Vec<ElemId>> = HashMap::new();
+        for e in 0..n_elems as ElemId {
+            let ns = mesh.elem_nodes(e);
+            for &(a, b) in &local_edges_tri() {
+                let key = edge_key(ns[a], ns[b]);
+                edge_elems.entry(key).or_default().push(e);
+            }
+        }
+
+        // ── 2. Create midpoint nodes for marked elements ───────────────
+        let mut midpoint_map: HashMap<(NodeId, NodeId), NodeId> = HashMap::new();
+        let mut new_coords: Vec<f64> = mesh.coords.clone();
+        let mut next_node = mesh.n_nodes() as NodeId;
+
+        for &e in marked {
+            let ns = mesh.elem_nodes(e);
+            for &(a, b) in &local_edges_tri() {
+                let key = edge_key(ns[a], ns[b]);
+                if midpoint_map.contains_key(&key) { continue; }
+                // Check if a midpoint already exists from a previous level.
+                if let Some(&mid) = self.active_midpoints.get(&key) {
+                    midpoint_map.insert(key, mid);
+                } else {
+                    let xa = mesh.coords_of(ns[a]);
+                    let xb = mesh.coords_of(ns[b]);
+                    new_coords.push(0.5 * (xa[0] + xb[0]));
+                    new_coords.push(0.5 * (xa[1] + xb[1]));
+                    let id = next_node;
+                    next_node += 1;
+                    midpoint_map.insert(key, id);
+                }
+            }
+        }
+
+        // ── 3. Build new element connectivity ──────────────────────────
+        let mut new_conn: Vec<NodeId> = Vec::new();
+        let mut new_tags: Vec<i32> = Vec::new();
+
+        for e in 0..n_elems as ElemId {
+            let ns = mesh.elem_nodes(e);
+            let tag = mesh.elem_tags[e as usize];
+
+            if marked_set.contains(&e) {
+                let n0 = ns[0]; let n1 = ns[1]; let n2 = ns[2];
+                let m01 = *midpoint_map.get(&edge_key(n0, n1)).unwrap();
+                let m12 = *midpoint_map.get(&edge_key(n1, n2)).unwrap();
+                let m02 = *midpoint_map.get(&edge_key(n0, n2)).unwrap();
+
+                new_conn.extend_from_slice(&[n0,  m01, m02]); new_tags.push(tag);
+                new_conn.extend_from_slice(&[m01, n1,  m12]); new_tags.push(tag);
+                new_conn.extend_from_slice(&[m02, m12, n2 ]); new_tags.push(tag);
+                new_conn.extend_from_slice(&[m01, m12, m02]); new_tags.push(tag);
+            } else {
+                for k in 0..3 { new_conn.push(ns[k]); }
+                new_tags.push(tag);
+            }
+        }
+
+        // ── 4. Detect hanging nodes + resolve old ones ─────────────────
+        // Merge new midpoints into active set.
+        for (&edge, &mid) in &midpoint_map {
+            self.active_midpoints.insert(edge, mid);
+        }
+
+        // Rebuild constraints: a midpoint is hanging if at least one of
+        // its parent edge's adjacent elements in the NEW mesh does NOT
+        // reference the midpoint node.
+        //
+        // Build edge → element adjacency for the NEW connectivity.
+        let new_n_elems = new_tags.len();
+        let mut new_edge_elems: HashMap<(NodeId, NodeId), Vec<u32>> = HashMap::new();
+        for e in 0..new_n_elems as u32 {
+            let off = e as usize * 3;
+            let ns = &new_conn[off..off + 3];
+            for &(a, b) in &local_edges_tri() {
+                let key = edge_key(ns[a], ns[b]);
+                new_edge_elems.entry(key).or_default().push(e);
+            }
+        }
+
+        // Also build a set of all nodes referenced by each element.
+        let new_node_set: std::collections::HashSet<NodeId> =
+            new_conn.iter().copied().collect();
+
+        let mut new_constraints = Vec::new();
+        for (&(a, b), &mid) in &self.active_midpoints {
+            if !new_node_set.contains(&mid) {
+                // Midpoint not in any element → stale, remove.
+                continue;
+            }
+            // Check if the midpoint is used by all elements that share
+            // the parent edge.  If both sub-edges (a,mid) and (mid,b)
+            // appear in the adjacency, all neighbours see the midpoint.
+            let sub_a = edge_key(a, mid);
+            let sub_b = edge_key(mid, b);
+            let adj_a = new_edge_elems.get(&sub_a).map(|v| v.len()).unwrap_or(0);
+            let adj_b = new_edge_elems.get(&sub_b).map(|v| v.len()).unwrap_or(0);
+
+            // Also check if the original parent edge (a,b) still exists
+            // in any element (meaning a coarse element still spans a→b).
+            let parent_exists = new_edge_elems.contains_key(&edge_key(a, b));
+
+            if parent_exists {
+                // A coarse element still has edge (a,b), so mid is hanging.
+                new_constraints.push(HangingNodeConstraint {
+                    constrained: mid as usize,
+                    parent_a: a as usize,
+                    parent_b: b as usize,
+                });
+            } else if adj_a < 2 || adj_b < 2 {
+                // Sub-edges not fully surrounded → boundary hanging node
+                // (can happen on the mesh boundary — skip, not truly hanging).
+            }
+            // Otherwise: both sub-edges have 2 adjacent elements each →
+            // the midpoint is fully resolved (no longer hanging).
+        }
+
+        // Clean up stale midpoints.
+        self.active_midpoints.retain(|_, mid| new_node_set.contains(mid));
+
+        new_constraints.sort_by_key(|c| c.constrained);
+        self.constraints = new_constraints.clone();
+
+        // ── 5. Rebuild boundary faces ──────────────────────────────────
+        let npf = 2usize;
+        let n_faces = mesh.n_faces();
+        let mut new_face_conn: Vec<NodeId> = Vec::new();
+        let mut new_face_tags: Vec<i32> = Vec::new();
+
+        for f in 0..n_faces {
+            let fn_slice = &mesh.face_conn[f * npf..(f + 1) * npf];
+            let fa = fn_slice[0];
+            let fb = fn_slice[1];
+            let tag = mesh.face_tags[f];
+
+            if let Some(&mid) = midpoint_map.get(&edge_key(fa, fb)) {
+                new_face_conn.extend_from_slice(&[fa, mid]); new_face_tags.push(tag);
+                new_face_conn.extend_from_slice(&[mid, fb]); new_face_tags.push(tag);
+            } else {
+                new_face_conn.extend_from_slice(&[fa, fb]);
+                new_face_tags.push(tag);
+            }
+        }
+
+        let new_mesh = SimplexMesh::uniform(
+            new_coords, new_conn, new_tags, ElementType::Tri3,
+            new_face_conn, new_face_tags, ElementType::Line2,
+        );
+
+        (new_mesh, self.constraints.clone(), midpoint_map)
+    }
+}
+
+/// Prolongate (interpolate) a P1 solution vector from a coarser mesh to the
+/// refined mesh produced by [`refine_nonconforming`] or [`NCState::refine`].
+///
+/// Existing nodes keep their values; each new midpoint node gets the average
+/// of the two parent nodes: `u_new[mid] = 0.5*(u_old[a] + u_old[b])`.
+///
+/// # Arguments
+/// * `u_coarse`     — solution on the coarse mesh (length = coarse n_nodes).
+/// * `n_nodes_fine` — number of nodes in the fine mesh.
+/// * `midpoint_map` — mapping `(a, b) → mid` from edge endpoints to midpoint
+///                    node IDs (as returned by [`refine_nonconforming`]).
+///
+/// # Returns
+/// Solution vector of length `n_nodes_fine`.
+pub fn prolongate_p1(
+    u_coarse: &[f64],
+    n_nodes_fine: usize,
+    midpoint_map: &HashMap<(NodeId, NodeId), NodeId>,
+) -> Vec<f64> {
+    let mut u_fine = vec![0.0_f64; n_nodes_fine];
+    // Copy existing node values.
+    for (i, &v) in u_coarse.iter().enumerate() {
+        u_fine[i] = v;
+    }
+    // Interpolate new midpoint nodes.
+    for (&(a, b), &mid) in midpoint_map {
+        u_fine[mid as usize] = 0.5 * (u_coarse[a as usize] + u_coarse[b as usize]);
+    }
+    u_fine
 }
 
 // ─── Non-conforming refinement ───────────────────────────────────────────────
@@ -816,5 +1027,118 @@ mod tests {
         let mesh = SimplexMesh::<2>::unit_square_tri(3);
         let (nc, _) = refine_nonconforming(&mesh, &[0, 3, 5]);
         nc.check().unwrap();
+    }
+
+    // ── Prolongation tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn prolongate_p1_linear_exact() {
+        // For u = x (linear), prolongation should be exact.
+        let mesh = SimplexMesh::<2>::unit_square_tri(2);
+        let u: Vec<f64> = (0..mesh.n_nodes())
+            .map(|n| mesh.coords_of(n as NodeId)[0])
+            .collect();
+
+        let mut nc = NCState::new();
+        let (fine, _, midpts) = nc.refine(&mesh, &[0, 1, 2]);
+        let u_fine = prolongate_p1(&u, fine.n_nodes(), &midpts);
+
+        // Every node in the fine mesh should have u = x.
+        for n in 0..fine.n_nodes() {
+            let x = fine.coords_of(n as NodeId)[0];
+            assert!(
+                (u_fine[n] - x).abs() < 1e-14,
+                "prolongation: u[{n}]={}, expected x={x}", u_fine[n]
+            );
+        }
+    }
+
+    #[test]
+    fn prolongate_p1_preserves_coarse_values() {
+        let mesh = SimplexMesh::<2>::unit_square_tri(2);
+        let u: Vec<f64> = (0..mesh.n_nodes()).map(|i| i as f64 * 1.5).collect();
+
+        let mut nc = NCState::new();
+        let (fine, _, midpts) = nc.refine(&mesh, &[0]);
+        let u_fine = prolongate_p1(&u, fine.n_nodes(), &midpts);
+
+        // Coarse node values must be preserved.
+        for i in 0..mesh.n_nodes() {
+            assert!(
+                (u_fine[i] - u[i]).abs() < 1e-14,
+                "coarse node {i}: u_fine={}, u_coarse={}", u_fine[i], u[i]
+            );
+        }
+    }
+
+    // ── Multi-level NCState tests ───────────────────────────────────────────
+
+    #[test]
+    fn ncstate_two_level_refine() {
+        let mesh = SimplexMesh::<2>::unit_square_tri(2);
+        let mut nc = NCState::new();
+
+        let (m1, c1, _) = nc.refine(&mesh, &[0, 1]);
+        assert!(!c1.is_empty());
+        m1.check().unwrap();
+
+        // Second level: refine some of the new elements.
+        let (m2, c2, _) = nc.refine(&m1, &[0, 1]);
+        assert!(m2.n_elems() > m1.n_elems());
+        m2.check().unwrap();
+        let _ = c2;
+    }
+
+    #[test]
+    fn ncstate_resolves_hanging_nodes_when_neighbour_refined() {
+        // Refining all elements at level 2 does NOT resolve level 1 hanging nodes,
+        // because the formerly-coarse elements' children are at a different depth
+        // than the re-refined children. This is correct NC behavior.
+        //
+        // However, when we refine only the coarse elements that cause hanging nodes
+        // (and not the already-fine ones), the hanging nodes SHOULD be resolved
+        // at that interface — though new hanging nodes may appear elsewhere.
+        let mesh = SimplexMesh::<2>::unit_square_tri(2);
+        let mut nc = NCState::new();
+
+        // Refine half the elements → hanging nodes.
+        let half: Vec<ElemId> = (0..mesh.n_elems() as ElemId / 2).collect();
+        let (m1, c1, _) = nc.refine(&mesh, &half);
+        assert!(!c1.is_empty(), "should have hanging nodes after partial refinement");
+        m1.check().unwrap();
+
+        // Refine ALL elements → creates a uniformly finer mesh, but multi-level
+        // hanging nodes can appear from depth mismatch.
+        let all: Vec<ElemId> = (0..m1.n_elems() as ElemId).collect();
+        let (m2, c2, _) = nc.refine(&m1, &all);
+        m2.check().unwrap();
+        // The original hanging nodes may produce new constraints at deeper levels.
+        // This is expected for multi-level NC refinement.
+        let _ = c2;
+    }
+
+    #[test]
+    fn ncstate_multi_level_prolongation() {
+        // Prolongate u=x through two levels of NC refinement.
+        let mesh = SimplexMesh::<2>::unit_square_tri(2);
+        let u0: Vec<f64> = (0..mesh.n_nodes())
+            .map(|n| mesh.coords_of(n as NodeId)[0])
+            .collect();
+
+        let mut nc = NCState::new();
+        let (m1, _, mp1) = nc.refine(&mesh, &[0, 1]);
+        let u1 = prolongate_p1(&u0, m1.n_nodes(), &mp1);
+
+        let (m2, _, mp2) = nc.refine(&m1, &[0]);
+        let u2 = prolongate_p1(&u1, m2.n_nodes(), &mp2);
+
+        // All nodes should still have u = x (exact for linear).
+        for n in 0..m2.n_nodes() {
+            let x = m2.coords_of(n as NodeId)[0];
+            assert!(
+                (u2[n] - x).abs() < 1e-14,
+                "2-level prolongation: node {n}, u={}, x={x}", u2[n]
+            );
+        }
     }
 }

@@ -35,7 +35,7 @@ use fem_assembly::{
     standard::{DiffusionIntegrator, DomainSourceIntegrator},
 };
 use fem_mesh::{SimplexMesh, topology::MeshTopology};
-use fem_mesh::amr::{refine_uniform, refine_nonconforming, zz_estimator, dorfler_mark};
+use fem_mesh::amr::{refine_uniform, NCState, zz_estimator, dorfler_mark, prolongate_p1};
 use fem_solver::{solve_pcg_jacobi, SolverConfig};
 use fem_space::{H1Space, fe_space::FESpace, constraints::{apply_dirichlet, apply_hanging_constraints, recover_hanging_values, boundary_dofs}};
 
@@ -61,6 +61,8 @@ fn main() {
     let mut mesh = SimplexMesh::<2>::unit_square_tri(args.n0);
     let mut prev_l2: Option<f64> = None;
     let mut hanging_constraints = Vec::new();
+    let mut nc_state = NCState::new();
+    let mut prev_u: Option<Vec<f64>> = None;
 
     for level in 0..=args.levels {
         // ─── 1. Build H1 space on current mesh ─────────────────────────
@@ -88,7 +90,10 @@ fn main() {
         apply_dirichlet(&mut mat, &mut rhs, &bnd, &bnd_vals);
 
         // ─── 4. Solve with PCG + Jacobi ────────────────────────────────
-        let mut u = vec![0.0_f64; n];
+        let mut u = prev_u.take().unwrap_or_else(|| vec![0.0_f64; n]);
+        u.resize(n, 0.0);
+        // Zero out constrained DOFs (recovered after solve).
+        for c in &hanging_constraints { u[c.constrained] = 0.0; }
         let cfg = SolverConfig {
             rtol: 1e-10, atol: 1e-14, max_iter: 20_000, verbose: false,
             ..SolverConfig::default()
@@ -134,19 +139,14 @@ fn main() {
 
         if level < args.levels {
             if args.nonconforming {
-                // Non-conforming: refine only marked elements (single-level).
-                // Note: multi-level NC refinement requires constraint tree tracking
-                // which is not yet implemented; for now each level starts fresh.
-                let (new_mesh, new_constraints) = refine_nonconforming(&mesh, &marked);
+                let (new_mesh, new_constraints, midpt_map) = nc_state.refine(&mesh, &marked);
+                prev_u = Some(prolongate_p1(&u, new_mesh.n_nodes(), &midpt_map));
                 mesh = new_mesh;
                 hanging_constraints = new_constraints;
-
-                // Also carry forward old constraints that still apply.
-                // A previous hanging node is resolved if both its parent-edge
-                // elements are now refined.  For single-level this is fine.
             } else {
                 mesh = refine_uniform(&mesh);
                 hanging_constraints.clear();
+                prev_u = None; // no prolongation for uniform refinement
             }
         }
     }
