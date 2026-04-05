@@ -159,15 +159,10 @@ pub fn refine_marked(mesh: &SimplexMesh<2>, marked: &[ElemId]) -> SimplexMesh<2>
         }
     }
 
-    SimplexMesh {
-        coords:    new_coords,
-        conn:      new_conn,
-        elem_tags: new_tags,
-        elem_type: ElementType::Tri3,
-        face_conn: new_face_conn,
-        face_tags: new_face_tags,
-        face_type: ElementType::Line2,
-    }
+    SimplexMesh::uniform(
+        new_coords, new_conn, new_tags, ElementType::Tri3,
+        new_face_conn, new_face_tags, ElementType::Line2,
+    )
 }
 
 // ─── Hanging-node constraint ──────────────────────────────────────────────────

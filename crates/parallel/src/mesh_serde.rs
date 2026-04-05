@@ -207,15 +207,10 @@ pub fn decode_submesh<const D: usize>(buf: &[u8]) -> Result<(SimplexMesh<D>, Mes
     let node_owner = read_i32_vec(buf, &mut offset, total_part_nodes)?;
     let global_elem_ids = read_u32_vec(buf, &mut offset, n_local_elems)?;
 
-    let mesh = SimplexMesh::<D> {
-        coords,
-        conn,
-        elem_tags,
-        elem_type,
-        face_conn,
-        face_tags,
-        face_type,
-    };
+    let mesh = SimplexMesh::uniform(
+        coords, conn, elem_tags, elem_type,
+        face_conn, face_tags, face_type,
+    );
 
     let partition = MeshPartition::from_raw(
         n_owned,
@@ -312,15 +307,15 @@ mod tests {
 
         // Build a minimal local mesh matching the partition.
         let n_local_nodes = owned_global.len() + ghost_global.len(); // 7
-        let mesh = SimplexMesh::<2> {
-            coords:    vec![0.0; n_local_nodes * 2],
-            conn:      vec![0, 1, 2,  3, 4, 5,  4, 5, 6],
-            elem_tags: vec![1, 1, 1],
-            elem_type: ElementType::Tri3,
-            face_conn: vec![0, 1],
-            face_tags: vec![1],
-            face_type: ElementType::Line2,
-        };
+        let mesh = SimplexMesh::<2>::uniform(
+            vec![0.0; n_local_nodes * 2],
+            vec![0, 1, 2,  3, 4, 5,  4, 5, 6],
+            vec![1, 1, 1],
+            ElementType::Tri3,
+            vec![0, 1],
+            vec![1],
+            ElementType::Line2,
+        );
 
         let buf = encode_submesh(&mesh, &partition);
         let (mesh2, part2) = decode_submesh::<2>(&buf).expect("decode failed");

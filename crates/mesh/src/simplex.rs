@@ -1,12 +1,15 @@
 use fem_core::{ElemId, FaceId, FemError, FemResult, NodeId};
 use crate::{boundary::BoundaryTag, element_type::ElementType, topology::MeshTopology};
 
-/// Unstructured simplex (or general) mesh with a uniform element type.
+/// Unstructured mesh with uniform or mixed element types.
 ///
-/// All volume elements share the same `elem_type`; boundary faces share
-/// `face_type` (one topological dimension lower).  Node coordinates are
-/// stored in a flat array: index of node `n`'s first coordinate is
-/// `n as usize * D`.
+/// When all elements share the same type, `elem_type` determines the
+/// uniform stride into `conn`.  For mixed-element meshes, the optional
+/// `elem_types` and `elem_offsets` fields provide per-element type and
+/// connectivity offsets (CSR-like).
+///
+/// Node coordinates are stored in a flat array: index of node `n`'s
+/// first coordinate is `n as usize * D`.
 ///
 /// # Type parameter
 /// `D` is the spatial dimension (2 = 2-D, 3 = 3-D).
@@ -14,18 +17,32 @@ use crate::{boundary::BoundaryTag, element_type::ElementType, topology::MeshTopo
 pub struct SimplexMesh<const D: usize> {
     /// Flat node coordinate array.  Length = `n_nodes * D`.
     pub coords: Vec<f64>,
-    /// Flat element connectivity (0-based node indices).  Length = `n_elems * npe`.
+    /// Flat element connectivity (0-based node indices).
+    /// Uniform: length = `n_elems * npe`.
+    /// Mixed:   length = sum of nodes per element (indexed via `elem_offsets`).
     pub conn: Vec<NodeId>,
     /// Physical group tag per element (e.g. material id). Length = `n_elems`.
     pub elem_tags: Vec<i32>,
-    /// Element type (uniform across the mesh).
+    /// Element type (uniform across the mesh, or the "primary" type for mixed).
     pub elem_type: ElementType,
     /// Flat boundary face connectivity (0-based node indices).
     pub face_conn: Vec<NodeId>,
     /// Physical group tag per boundary face (e.g. BC label). Length = `n_faces`.
     pub face_tags: Vec<BoundaryTag>,
-    /// Face type (one dimension lower than `elem_type`).
+    /// Face type (one dimension lower than `elem_type`, or primary face type).
     pub face_type: ElementType,
+
+    // ─── Mixed-element support (None = uniform) ──────────────────────────
+    /// Per-element type.  `None` means all elements share `elem_type`.
+    pub elem_types: Option<Vec<ElementType>>,
+    /// CSR-like start offsets into `conn`.  Length = `n_elems + 1`.
+    /// `elem_offsets[e]..elem_offsets[e+1]` are the conn indices for element `e`.
+    /// `None` means uniform stride `elem_type.nodes_per_element()`.
+    pub elem_offsets: Option<Vec<usize>>,
+    /// Per-face type.  `None` means all faces share `face_type`.
+    pub face_types: Option<Vec<ElementType>>,
+    /// CSR-like start offsets into `face_conn`.  Length = `n_faces + 1`.
+    pub face_offsets: Option<Vec<usize>>,
 }
 
 impl<const D: usize> SimplexMesh<D> {
@@ -35,13 +52,21 @@ impl<const D: usize> SimplexMesh<D> {
     }
     /// Number of volume elements.
     pub fn n_elems(&self) -> usize {
-        let npe = self.elem_type.nodes_per_element();
-        if npe == 0 { 0 } else { self.conn.len() / npe }
+        if let Some(ref offsets) = self.elem_offsets {
+            offsets.len() - 1
+        } else {
+            let npe = self.elem_type.nodes_per_element();
+            if npe == 0 { 0 } else { self.conn.len() / npe }
+        }
     }
     /// Number of boundary faces.
     pub fn n_faces(&self) -> usize {
-        let npf = self.face_type.nodes_per_element();
-        if npf == 0 { 0 } else { self.face_conn.len() / npf }
+        if let Some(ref offsets) = self.face_offsets {
+            offsets.len() - 1
+        } else {
+            let npf = self.face_type.nodes_per_element();
+            if npf == 0 { 0 } else { self.face_conn.len() / npf }
+        }
     }
 
     /// Coordinates of node `n` as a `[f64; D]` array.
@@ -54,17 +79,34 @@ impl<const D: usize> SimplexMesh<D> {
     /// Node indices of volume element `e`.
     #[inline]
     pub fn elem_nodes(&self, e: ElemId) -> &[NodeId] {
-        let npe = self.elem_type.nodes_per_element();
-        let off = e as usize * npe;
-        &self.conn[off..off + npe]
+        if let Some(ref offsets) = self.elem_offsets {
+            let start = offsets[e as usize];
+            let end = offsets[e as usize + 1];
+            &self.conn[start..end]
+        } else {
+            let npe = self.elem_type.nodes_per_element();
+            let off = e as usize * npe;
+            &self.conn[off..off + npe]
+        }
     }
 
     /// Node indices of boundary face `f`.
     #[inline]
     pub fn bface_nodes(&self, f: FaceId) -> &[NodeId] {
-        let npf = self.face_type.nodes_per_element();
-        let off = f as usize * npf;
-        &self.face_conn[off..off + npf]
+        if let Some(ref offsets) = self.face_offsets {
+            let start = offsets[f as usize];
+            let end = offsets[f as usize + 1];
+            &self.face_conn[start..end]
+        } else {
+            let npf = self.face_type.nodes_per_element();
+            let off = f as usize * npf;
+            &self.face_conn[off..off + npf]
+        }
+    }
+
+    /// Whether this mesh has mixed element types.
+    pub fn is_mixed(&self) -> bool {
+        self.elem_types.is_some()
     }
 
     /// Validate internal consistency.
@@ -85,6 +127,23 @@ impl<const D: usize> SimplexMesh<D> {
             }
         }
         Ok(())
+    }
+
+    /// Create a uniform (non-mixed) mesh.  Convenience constructor that sets
+    /// all mixed-element fields to `None`.
+    pub fn uniform(
+        coords: Vec<f64>,
+        conn: Vec<NodeId>,
+        elem_tags: Vec<i32>,
+        elem_type: ElementType,
+        face_conn: Vec<NodeId>,
+        face_tags: Vec<BoundaryTag>,
+        face_type: ElementType,
+    ) -> Self {
+        SimplexMesh {
+            coords, conn, elem_tags, elem_type, face_conn, face_tags, face_type,
+            elem_types: None, elem_offsets: None, face_types: None, face_offsets: None,
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -153,15 +212,10 @@ impl<const D: usize> SimplexMesh<D> {
             add_edge(&mut face_conn, &mut face_tags, nid(0,i+1), nid(0,i), 4);
         }
 
-        SimplexMesh {
-            coords,
-            conn,
-            elem_tags,
-            elem_type: ElementType::Tri3,
-            face_conn,
-            face_tags,
-            face_type: ElementType::Line2,
-        }
+        SimplexMesh::uniform(
+            coords, conn, elem_tags, ElementType::Tri3,
+            face_conn, face_tags, ElementType::Line2,
+        )
     }
 
     /// Generate a coaxial cable cross-section mesh (annular region).
@@ -246,15 +300,10 @@ impl<const D: usize> SimplexMesh<D> {
             face_tags_v.push(2i32);
         }
 
-        SimplexMesh {
-            coords,
-            conn,
-            elem_tags,
-            elem_type: ElementType::Tri3,
-            face_conn,
-            face_tags: face_tags_v,
-            face_type: ElementType::Line2,
-        }
+        SimplexMesh::uniform(
+            coords, conn, elem_tags, ElementType::Tri3,
+            face_conn, face_tags_v, ElementType::Line2,
+        )
     }
 
     /// Generate a uniform tetrahedral mesh on the unit cube `[0,1]³`.
@@ -370,15 +419,10 @@ impl<const D: usize> SimplexMesh<D> {
             }
         }
 
-        SimplexMesh {
-            coords,
-            conn,
-            elem_tags,
-            elem_type: ElementType::Tet4,
-            face_conn,
-            face_tags,
-            face_type: ElementType::Tri3,
-        }
+        SimplexMesh::uniform(
+            coords, conn, elem_tags, ElementType::Tet4,
+            face_conn, face_tags, ElementType::Tri3,
+        )
     }
 }
 
@@ -397,7 +441,13 @@ impl<const D: usize> MeshTopology for SimplexMesh<D> {
 
     fn element_nodes(&self, elem: ElemId) -> &[NodeId] { self.elem_nodes(elem) }
 
-    fn element_type(&self, _elem: ElemId) -> ElementType { self.elem_type }
+    fn element_type(&self, elem: ElemId) -> ElementType {
+        if let Some(ref types) = self.elem_types {
+            types[elem as usize]
+        } else {
+            self.elem_type
+        }
+    }
 
     fn element_tag(&self, elem: ElemId) -> i32 { self.elem_tags[elem as usize] }
 

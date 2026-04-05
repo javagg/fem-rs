@@ -223,7 +223,7 @@ pub(crate) fn extract_submesh_from_partition<const D: usize>(
     }
 
     // 6. Build local connectivity with remapped node IDs (owned + ghost elements).
-    let npe = mesh.elem_type.nodes_per_element();
+    let npe = mesh.elem_type.nodes_per_element(); // assumes uniform mesh for parallel
     let all_local_elems = local_elem_gids.len() + ghost_elem_gids.len();
     let mut local_conn = Vec::with_capacity(all_local_elems * npe);
     let mut local_elem_tags = Vec::with_capacity(all_local_elems);
@@ -239,15 +239,10 @@ pub(crate) fn extract_submesh_from_partition<const D: usize>(
         extract_local_faces(mesh, &g2l, &node_owners, target_rank);
 
     // 8. Assemble the local sub-mesh.
-    let local_mesh = SimplexMesh::<D> {
-        coords:     local_coords,
-        conn:       local_conn,
-        elem_tags:  local_elem_tags,
-        elem_type:  mesh.elem_type,
-        face_conn:  local_face_conn,
-        face_tags:  local_face_tags,
-        face_type:  mesh.face_type,
-    };
+    let local_mesh = SimplexMesh::uniform(
+        local_coords, local_conn, local_elem_tags, mesh.elem_type,
+        local_face_conn, local_face_tags, mesh.face_type,
+    );
 
     let partition = MeshPartition::from_partitioner(
         &owned_global,

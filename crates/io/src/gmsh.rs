@@ -505,14 +505,23 @@ impl MshParser {
         let mut conn:      Vec<u32> = Vec::new();
         let mut elem_tags: Vec<i32> = Vec::new();
         let mut elem_type_opt = None;
+        let mut elem_types_vec: Vec<ElementType> = Vec::new();
+        let mut elem_offsets_vec: Vec<usize> = vec![0];
+        let mut is_mixed = false;
 
         for blk in &self.elem_by_dim[2] {
             let npe = blk.etype.nodes_per_element();
-            if elem_type_opt.is_none() { elem_type_opt = Some(blk.etype); }
+            if let Some(first) = elem_type_opt {
+                if blk.etype != first { is_mixed = true; }
+            } else {
+                elem_type_opt = Some(blk.etype);
+            }
             let n_elems = blk.conn.len() / npe;
             for i in 0..n_elems {
                 conn.extend_from_slice(&blk.conn[i * npe..(i + 1) * npe]);
                 elem_tags.push(blk.phys_tag);
+                elem_types_vec.push(blk.etype);
+                elem_offsets_vec.push(conn.len());
             }
         }
 
@@ -522,16 +531,35 @@ impl MshParser {
 
         let mut face_conn: Vec<u32> = Vec::new();
         let mut face_tags: Vec<i32> = Vec::new();
+        let mut face_types_vec: Vec<ElementType> = Vec::new();
+        let mut face_offsets_vec: Vec<usize> = vec![0];
+        let mut face_mixed = false;
+
         for blk in &self.elem_by_dim[1] {
             let npe = blk.etype.nodes_per_element();
+            if blk.etype != face_type { face_mixed = true; }
             let n_faces = blk.conn.len() / npe;
             for i in 0..n_faces {
                 face_conn.extend_from_slice(&blk.conn[i * npe..(i + 1) * npe]);
                 face_tags.push(blk.phys_tag);
+                face_types_vec.push(blk.etype);
+                face_offsets_vec.push(face_conn.len());
             }
         }
 
-        Ok(SimplexMesh { coords, conn, elem_tags, elem_type, face_conn, face_tags, face_type })
+        let mut mesh = SimplexMesh::uniform(
+            coords, conn, elem_tags, elem_type,
+            face_conn, face_tags, face_type,
+        );
+        if is_mixed {
+            mesh.elem_types = Some(elem_types_vec);
+            mesh.elem_offsets = Some(elem_offsets_vec);
+        }
+        if face_mixed {
+            mesh.face_types = Some(face_types_vec);
+            mesh.face_offsets = Some(face_offsets_vec);
+        }
+        Ok(mesh)
     }
 
     fn build_3d(self, n_nodes: usize) -> FemResult<SimplexMesh<3>> {
@@ -545,14 +573,23 @@ impl MshParser {
         let mut conn:      Vec<u32> = Vec::new();
         let mut elem_tags: Vec<i32> = Vec::new();
         let mut elem_type_opt = None;
+        let mut elem_types_vec: Vec<ElementType> = Vec::new();
+        let mut elem_offsets_vec: Vec<usize> = vec![0];
+        let mut is_mixed = false;
 
         for blk in &self.elem_by_dim[3] {
             let npe = blk.etype.nodes_per_element();
-            if elem_type_opt.is_none() { elem_type_opt = Some(blk.etype); }
+            if let Some(first) = elem_type_opt {
+                if blk.etype != first { is_mixed = true; }
+            } else {
+                elem_type_opt = Some(blk.etype);
+            }
             let n_elems = blk.conn.len() / npe;
             for i in 0..n_elems {
                 conn.extend_from_slice(&blk.conn[i * npe..(i + 1) * npe]);
                 elem_tags.push(blk.phys_tag);
+                elem_types_vec.push(blk.etype);
+                elem_offsets_vec.push(conn.len());
             }
         }
 
@@ -562,16 +599,35 @@ impl MshParser {
 
         let mut face_conn: Vec<u32> = Vec::new();
         let mut face_tags: Vec<i32> = Vec::new();
+        let mut face_types_vec: Vec<ElementType> = Vec::new();
+        let mut face_offsets_vec: Vec<usize> = vec![0];
+        let mut face_mixed = false;
+
         for blk in &self.elem_by_dim[2] {
             let npe = blk.etype.nodes_per_element();
+            if blk.etype != face_type { face_mixed = true; }
             let n_faces = blk.conn.len() / npe;
             for i in 0..n_faces {
                 face_conn.extend_from_slice(&blk.conn[i * npe..(i + 1) * npe]);
                 face_tags.push(blk.phys_tag);
+                face_types_vec.push(blk.etype);
+                face_offsets_vec.push(face_conn.len());
             }
         }
 
-        Ok(SimplexMesh { coords, conn, elem_tags, elem_type, face_conn, face_tags, face_type })
+        let mut mesh = SimplexMesh::uniform(
+            coords, conn, elem_tags, elem_type,
+            face_conn, face_tags, face_type,
+        );
+        if is_mixed {
+            mesh.elem_types = Some(elem_types_vec);
+            mesh.elem_offsets = Some(elem_offsets_vec);
+        }
+        if face_mixed {
+            mesh.face_types = Some(face_types_vec);
+            mesh.face_offsets = Some(face_offsets_vec);
+        }
+        Ok(mesh)
     }
 }
 
@@ -814,5 +870,41 @@ $EndElements
         let data = "$MeshFormat\n1.0 0 8\n$EndMeshFormat\n";
         let result = read_msh(data.as_bytes());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn read_mixed_tri_quad_v2() {
+        // 5 nodes, 1 triangle + 1 quad = mixed mesh
+        //  3---4---5
+        //  |   | /
+        //  1---2
+        let data = r#"$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$Nodes
+5
+1 0.0 0.0 0.0
+2 1.0 0.0 0.0
+3 0.0 1.0 0.0
+4 1.0 1.0 0.0
+5 2.0 1.0 0.0
+$EndNodes
+$Elements
+2
+1 3 2 1 1 1 2 4 3
+2 2 2 1 1 2 5 4
+$EndElements
+"#;
+        let msh = read_msh(data.as_bytes()).expect("failed to parse mixed mesh");
+        let mesh = msh.into_2d().expect("expected 2D mesh");
+        assert_eq!(mesh.n_nodes(), 5);
+        assert_eq!(mesh.n_elems(), 2);
+        assert!(mesh.is_mixed(), "mesh should be mixed");
+        // First element is Quad4, second is Tri3
+        assert_eq!(mesh.element_type(0), ElementType::Quad4);
+        assert_eq!(mesh.element_type(1), ElementType::Tri3);
+        // Check connectivity lengths
+        assert_eq!(mesh.elem_nodes(0).len(), 4);
+        assert_eq!(mesh.elem_nodes(1).len(), 3);
     }
 }

@@ -30,7 +30,7 @@
 | MFEM class / concept | fem-rs equivalent | Status | Notes |
 |---|---|---|---|
 | `Mesh` (2D/3D unstructured) | `SimplexMesh<D>` | ✅ | Uniform element type per mesh |
-| `Mesh` (mixed elements) | `SimplexMesh<D>` + multiple `elem_type` | 🔲 | Phase 2: per-element type array |
+| `Mesh` (mixed elements) | `SimplexMesh<D>` + `elem_types`/`elem_offsets` | 🔨 | Phase 42a: data structures + I/O done |
 | `NCMesh` (non-conforming) | — | 🔲 | Phase 2+: hanging nodes for AMR |
 | `ParMesh` | `ParallelMesh<M>` | ✅ | Phase 10+33 |
 | `Mesh::GetNV()` | `MeshTopology::n_nodes()` | ✅ | |
@@ -542,6 +542,7 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 | 39 | `parallel`+`examples` | pex2 (mixed Poisson), pex3 (Maxwell), pex5 (Darcy) parallel examples | ✅ |
 | 39b | `amg` | Chebyshev smoother (`SmootherType::Chebyshev`), F-cycle (`CycleType::F`) | ✅ |
 | 40 | `examples`+`assembly` | Taylor-Hood P2-P1 Stokes (`ex_stokes` lid-driven cavity) | ✅ |
+| 42a | `mesh`+`space`+`io` | Mixed element mesh infrastructure (per-element types, variable DofManager, GMSH mixed read) | ✅ |
 
 ---
 
@@ -550,7 +551,7 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 ### Mesh
 | Item | Status | Priority |
 |------|--------|----------|
-| Mixed element meshes (Tri+Quad, Tet+Hex) | 🔲 | Medium |
+| Mixed element meshes (Tri+Quad, Tet+Hex) | 🔨 | Medium (data structures done, assembly pending) |
 | NCMesh (non-conforming, hanging nodes) | 🔲 | Low |
 | `bdr_attributes` dedup utility | 🔨 | Low |
 | `ElementTransformation` type | 🔨 | Low (works inline) |
@@ -626,13 +627,14 @@ prioritized roadmap for continued development.
 - ✅ Block saddle-point solver (SchurComplementSolver with GMRES)
 - ✅ Verified convergence at n=8,16,32; divergence-free to solver tolerance
 
-### Phase 42 — Mixed Element Meshes
-> **Priority: Medium** — unlocks real-world mesh flexibility
+### Phase 42 — Mixed Element Meshes (42a ✅, 42b pending)
+> **42a completed** — data structures and I/O ready; assembly pending
 
-- Per-element `ElementType` array in `SimplexMesh` (or rename to `UnstructuredMesh`)
-- Quadrature dispatch per element type
-- GMSH mixed-element mesh read support (Tri+Quad, Tet+Hex)
-- Assembly loop handles heterogeneous element types
+- ✅ Per-element `ElementType` and CSR-like offset arrays in `SimplexMesh`
+- ✅ Variable-stride `DofManager` for P1 on mixed meshes
+- ✅ GMSH reader preserves mixed element types (Tri+Quad, Tet+Hex)
+- 🔲 Assembly loop: bilinear Jacobian for Quad4/Hex8
+- 🔲 QuadQ1/Q2 reference element integration in assembler
 
 ### Phase 43 — HDF5/XDMF Parallel I/O
 > **Priority: Medium** — needed for large-scale checkpointing
