@@ -387,9 +387,9 @@ default (zero-cost for constants).
 | MFEM format / method | fem-rs | Status |
 |---|---|---|
 | MFEM native mesh format (read/write) | — | ❌ use GMSH |
-| GMSH `.msh` v2 (read) | — | 🔲 Phase 9+ |
+| GMSH `.msh` v2 ASCII (read) | `fem_io::read_msh_file()` | ✅ |
 | GMSH `.msh` v4.1 ASCII (read) | `fem_io::read_msh_file()` | ✅ |
-| GMSH `.msh` v4.1 binary (read) | — | 🔲 Phase 9 |
+| GMSH `.msh` v4.1 binary (read) | `fem_io::read_msh_file()` | ✅ |
 | Netgen `.vol` (read) | — | 🔲 Phase 9+ |
 | Abaqus `.inp` (read) | — | 🔲 Phase 9+ |
 | VTK `.vtu` legacy ASCII (write) | `write_vtk_scalar()` | ✅ |
@@ -538,6 +538,7 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 | 36 | `parallel` | Comm::split sub-communicators | ✅ |
 | 37 | `parallel`+`wasm` | WASM multi-Worker (spawn_async, jsmpi_main), streaming mesh partition (partition_simplex_streaming), binary mesh serde | ✅ |
 | 38 | `parallel` | METIS streaming partition (partition_simplex_metis_streaming), generalized submesh extractor, pex1 CLI flags | ✅ |
+| 38b | `io` | GMSH v2 ASCII + v4.1 binary reader (unified `read_msh_file()` entry point) | ✅ |
 
 ---
 
@@ -556,8 +557,8 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 ### I/O
 | Item | Status | Priority |
 |------|--------|----------|
-| GMSH v4.1 binary reader | 🔲 | **High** |
-| GMSH v2 reader | 🔲 | Medium |
+| ~~GMSH v4.1 binary reader~~ | ✅ | ~~High~~ Done |
+| ~~GMSH v2 reader~~ | ✅ | ~~Medium~~ Done |
 | HDF5/XDMF parallel I/O | 🔲 | Medium |
 | Netgen `.vol` reader | 🔲 | Low |
 | Abaqus `.inp` reader | 🔲 | Low |
@@ -589,3 +590,78 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 | pex5 (parallel Darcy) | 🔲 | Medium |
 | ex19 (Navier-Stokes) | 🔲 | Medium |
 | Browser E2E (WASM parallel) | 🔲 | Medium |
+
+---
+
+## Recommended Roadmap (Phase 39+)
+
+Based on the completed 38 phases and remaining gaps, here is a recommended
+prioritized roadmap for continued development.
+
+### Phase 39 — Parallel Examples Expansion (pex2 / pex3 / pex5)
+> **Priority: High** — validates parallel infrastructure across all FE spaces
+
+| Task | Space | Depends on |
+|------|-------|------------|
+| `pex2_mixed_poisson` | H(div) RT0 × L² | ParAssembler + BlockSystem |
+| `pex3_maxwell` | H(curl) ND1 | ParAssembler + VectorAssembler |
+| `pex5_darcy` | H(div) × L² saddle-point | ParAssembler + SchurComplement |
+
+### Phase 40 — Chebyshev Smoother + AMG F-cycle
+> **Priority: Medium** — smoother quality directly impacts AMG convergence
+
+- Chebyshev polynomial smoother (degree 2–4) as `SmootherKind::Chebyshev`
+- Eigenvalue estimate via a few CG iterations (λ_max bound)
+- F-cycle: `CycleType::F` (V on first coarse visit, W after)
+- Benchmark vs Jacobi/GS on 3D Poisson and elasticity
+
+### Phase 41 — Taylor-Hood P2-P1 Stokes Example
+> **Priority: Medium** — demonstrates mixed FEM at production quality
+
+- Full `ex_stokes` example: lid-driven cavity or backward-facing step
+- P2 velocity + P1 pressure via `MixedAssembler`
+- Block triangular preconditioner (pressure mass Schur complement)
+- Convergence rate verification: O(h³) velocity, O(h²) pressure
+
+### Phase 42 — Mixed Element Meshes
+> **Priority: Medium** — unlocks real-world mesh flexibility
+
+- Per-element `ElementType` array in `SimplexMesh` (or rename to `UnstructuredMesh`)
+- Quadrature dispatch per element type
+- GMSH mixed-element mesh read support (Tri+Quad, Tet+Hex)
+- Assembly loop handles heterogeneous element types
+
+### Phase 43 — HDF5/XDMF Parallel I/O
+> **Priority: Medium** — needed for large-scale checkpointing
+
+- Feature-gated `io/hdf5` with `hdf5-rs` crate
+- Write: parallel mesh + solution to XDMF + HDF5
+- Read: parallel restart from checkpoint
+- Time-series output for transient problems
+
+### Phase 44 — Navier-Stokes (ex19)
+> **Priority: Medium** — flagship nonlinear PDE example
+
+- Incremental pressure-correction or Newton on coupled system
+- Taylor-Hood spatial discretization (reuse Phase 41)
+- BDF-2 or SDIRK-2 time integration
+- Benchmark: Kovasznay flow (analytical solution comparison)
+
+### Phase 45 — Browser E2E (WASM Parallel)
+> **Priority: Medium** — completes the web platform story
+
+- Automated browser E2E test (Puppeteer / Playwright)
+- Multi-Worker mesh partition → solve → gather → visualize
+- Performance comparison: WASM vs native (same mesh size)
+- Demo page with interactive mesh + solution viewer
+
+### Backlog (Low Priority)
+| Item | Phase | Notes |
+|------|-------|-------|
+| NCMesh (hanging nodes) | TBD | Needed for h-AMR with coarsening |
+| Periodic meshes | TBD | Mapped to constraint DOFs |
+| Kelly error estimator | TBD | Face-jump based, alternative to ZZ |
+| H1 Trace space | TBD | Boundary element coupling |
+| hypre binding | TBD | Optional FFI for production AMG |
+| Netgen / Abaqus readers | TBD | Additional mesh import formats |
+| `DenseTensor` / `SetSubVector` | TBD | Convenience APIs |
