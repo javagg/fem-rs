@@ -36,6 +36,18 @@ pub struct ParCsrMatrix {
 }
 
 impl ParCsrMatrix {
+    /// Build from pre-split diagonal and off-diagonal blocks.
+    pub fn from_blocks(
+        diag: CsrMatrix<f64>,
+        offd: CsrMatrix<f64>,
+        n_owned: usize,
+        n_ghost: usize,
+        dof_ghost_exchange: Arc<GhostExchange>,
+        comm: Comm,
+    ) -> Self {
+        ParCsrMatrix { diag, offd, n_owned, n_ghost, dof_ghost_exchange, comm }
+    }
+
     /// Build from a local matrix (n_local x n_local where n_local = n_owned + n_ghost).
     ///
     /// Discards ghost rows (they are handled by the owning rank).  Splits
@@ -120,6 +132,14 @@ impl ParCsrMatrix {
     pub fn diagonal(&self) -> Vec<f64> {
         self.diag.diagonal()
     }
+
+    /// Arc-wrapped ghost exchange (for sharing with other structures).
+    pub fn ghost_exchange_arc(&self) -> Arc<GhostExchange> {
+        Arc::clone(&self.dof_ghost_exchange)
+    }
+
+    /// The MPI communicator.
+    pub fn comm(&self) -> &Comm { &self.comm }
 
     /// Apply Dirichlet BC at a local owned DOF: zero the row, set diagonal
     /// to 1, set `rhs[dof] = value`.

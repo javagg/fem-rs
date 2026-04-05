@@ -140,7 +140,7 @@ impl ParVector {
 
     /// Access the communicator.
     #[inline]
-    pub(crate) fn comm(&self) -> &Comm { &self.comm }
+    pub fn comm(&self) -> &Comm { &self.comm }
 
     // -- communication --------------------------------------------------------
 
