@@ -284,4 +284,46 @@ mod tests {
         assert!(rho > 3.5, "spectral radius should be near 4, got {rho}");
         assert!(rho < 4.1, "spectral radius too high: {rho}");
     }
+
+    #[test]
+    fn amg_cg_chebyshev_smoother() {
+        let n = 100;
+        let a = laplacian_1d(n);
+        let b = vec![1.0_f64; n];
+        let mut x = vec![0.0_f64; n];
+        let config = AmgConfig {
+            smoother: SmootherType::Chebyshev { degree: 3, ratio: 3.0 },
+            ..AmgConfig::default()
+        };
+        let res = solve_amg_cg(&a, &b, &mut x, &config, &SolverConfig::default()).unwrap();
+        assert!(res.converged, "Chebyshev AMG-CG failed: residual = {}", res.final_residual);
+        assert!(res.iterations < 50, "too many iterations: {}", res.iterations);
+    }
+
+    #[test]
+    fn amg_cg_fcycle() {
+        let n = 100;
+        let a = laplacian_1d(n);
+        let b = vec![1.0_f64; n];
+        let mut x = vec![0.0_f64; n];
+        let solver = AmgSolver::setup(&a, AmgConfig::default()).with_cycle(CycleType::F);
+        let res = solver.solve(&a, &b, &mut x, &SolverConfig::default()).unwrap();
+        assert!(res.converged, "F-cycle AMG-CG failed: residual = {}", res.final_residual);
+        assert!(res.iterations < 30, "too many iterations: {}", res.iterations);
+    }
+
+    #[test]
+    fn amg_cg_chebyshev_with_fcycle() {
+        let n = 80;
+        let a = laplacian_1d(n);
+        let b = vec![1.0_f64; n];
+        let mut x = vec![0.0_f64; n];
+        let config = AmgConfig {
+            smoother: SmootherType::Chebyshev { degree: 3, ratio: 3.0 },
+            ..AmgConfig::default()
+        };
+        let solver = AmgSolver::setup(&a, config).with_cycle(CycleType::F);
+        let res = solver.solve(&a, &b, &mut x, &SolverConfig::default()).unwrap();
+        assert!(res.converged, "Chebyshev+F-cycle failed: residual = {}", res.final_residual);
+    }
 }
