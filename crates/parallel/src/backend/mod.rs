@@ -85,6 +85,18 @@ pub trait CommBackend: Send + Sync {
     /// This is the primitive used by [`GhostExchange`](super::ghost::GhostExchange)
     /// to exchange ghost-node ownership metadata.
     fn alltoallv_bytes(&self, sends: &[(Rank, Vec<u8>)]) -> Vec<(Rank, Vec<u8>)>;
+
+    /// Split this communicator into sub-communicators based on `color`.
+    ///
+    /// Processes with the same `color` end up in the same sub-communicator.
+    /// Within each sub-communicator, ranks are ordered by `key`.
+    ///
+    /// Returns `(new_rank, new_size, new_backend)` for the calling process's
+    /// sub-communicator.  The default implementation panics — backends that
+    /// support splitting must override this.
+    fn split(&self, _color: i32, _key: i32) -> Box<dyn CommBackend> {
+        panic!("CommBackend::split not supported by this backend");
+    }
 }
 
 // ── platform modules ─────────────────────────────────────────────────────────

@@ -275,3 +275,59 @@ fn ghost_exchange_reverse_2d() {
         assert!(ok, "rank {rank}: ghost reverse exchange failed");
     }
 }
+
+// ── Comm::split ─────────────────────────────────────────────────────────────
+
+#[test]
+fn comm_split_even_odd() {
+    // Split 4 ranks into even (0,2) and odd (1,3) sub-communicators.
+    let results = Arc::new(Mutex::new(Vec::new()));
+
+    let l = launcher(4);
+    let results_clone = Arc::clone(&results);
+    l.launch(move |comm| {
+        let rank = comm.rank();
+        let color = rank % 2; // 0=even, 1=odd
+        let key = rank;       // preserve ordering
+
+        let sub_comm = comm.split(color, key);
+
+        let sub_rank = sub_comm.rank();
+        let sub_size = sub_comm.size();
+
+        results_clone.lock().unwrap().push((rank, color, sub_rank, sub_size));
+
+        // Test allreduce within sub-communicator.
+        let sum = sub_comm.allreduce_sum_i64(1);
+        assert_eq!(sum, 2, "rank {rank}: sub-allreduce should sum to 2 (2 ranks per group)");
+
+        // Test that sub-communicator ranks are correct.
+        assert_eq!(sub_size, 2, "rank {rank}: sub-comm should have 2 ranks");
+    });
+
+    let mut res = results.lock().unwrap().clone();
+    res.sort_by_key(|(r, _, _, _)| *r);
+
+    // rank 0: color=0, sub_rank=0, sub_size=2
+    assert_eq!(res[0], (0, 0, 0, 2));
+    // rank 1: color=1, sub_rank=0, sub_size=2
+    assert_eq!(res[1], (1, 1, 0, 2));
+    // rank 2: color=0, sub_rank=1, sub_size=2
+    assert_eq!(res[2], (2, 0, 1, 2));
+    // rank 3: color=1, sub_rank=1, sub_size=2
+    assert_eq!(res[3], (3, 1, 1, 2));
+}
+
+#[test]
+fn comm_split_single_group() {
+    // All ranks same color → sub-communicator = original.
+    let l = launcher(3);
+    l.launch(move |comm| {
+        let sub_comm = comm.split(0, comm.rank());
+        assert_eq!(sub_comm.size(), 3);
+        assert_eq!(sub_comm.rank(), comm.rank());
+
+        let sum = sub_comm.allreduce_sum_f64(1.0);
+        assert!((sum - 3.0).abs() < 1e-14);
+    });
+}
