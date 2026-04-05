@@ -175,6 +175,144 @@ pub fn par_solve_pcg_jacobi(
 }
 
 
+/// Parallel MINRES solver for symmetric (possibly indefinite) systems.
+///
+/// Solves `A x = b` where `A` is a distributed symmetric matrix.
+/// Uses the Lanczos-based MINRES algorithm (Choi-Paige-Saunders).
+pub fn par_solve_minres(
+    a: &ParCsrMatrix,
+    b: &ParVector,
+    x: &mut ParVector,
+    cfg: &SolverConfig,
+) -> Result<SolveResult, SolverError> {
+    let n = a.n_owned;
+    let b_norm = b.global_norm();
+    if b_norm < 1e-30 {
+        return Ok(SolveResult { converged: true, iterations: 0, final_residual: 0.0 });
+    }
+
+    // r = b - A*x
+    let mut r = b.clone_vec();
+    let mut ax = ParVector::zeros_like(b);
+    a.spmv(&mut x.clone_vec(), &mut ax);
+    for i in 0..n { r.data[i] = b.data[i] - ax.data[i]; }
+
+    let mut beta1 = r.global_norm();
+    if beta1 / b_norm < cfg.rtol {
+        return Ok(SolveResult { converged: true, iterations: 0, final_residual: beta1 / b_norm });
+    }
+
+    // Lanczos vectors
+    let mut v_old = ParVector::zeros_like(b);
+    let mut v_cur = r.clone_vec();
+    for i in 0..v_cur.len() { v_cur.data[i] /= beta1; }
+    let mut v_new = ParVector::zeros_like(b);
+
+    // MINRES recurrence scalars
+    let mut _beta_prev = 0.0_f64;
+    let mut beta_cur = beta1;
+    let mut c_old = 1.0_f64;
+    let mut c_cur = 1.0_f64;
+    let mut s_old = 0.0_f64;
+    let mut s_cur = 0.0_f64;
+
+    // Direction vectors
+    let mut w_prev = ParVector::zeros_like(b);
+    let mut w_cur = ParVector::zeros_like(b);
+
+    let mut res_norm = beta1 / b_norm;
+
+    for iter in 0..cfg.max_iter {
+        // Lanczos step: v_new = A*v_cur - beta_cur * v_old
+        a.spmv(&mut v_cur, &mut v_new);
+        let alpha = v_cur.global_dot(&v_new);
+        for i in 0..n {
+            v_new.data[i] -= alpha * v_cur.data[i] + beta_cur * v_old.data[i];
+        }
+        let beta_next = v_new.global_norm();
+
+        // Apply previous Givens rotations
+        let r1 = s_old * beta_cur;
+        let r2 = c_old * c_cur * beta_cur + s_cur * alpha;
+        let r3 = -s_old * s_cur * beta_cur + c_cur * alpha;
+
+        // this step's value before new rotation
+        let r3_hat = r3;
+        let r4 = beta_next;
+
+        // New Givens rotation to zero out beta_next
+        let gamma = (r3_hat * r3_hat + r4 * r4).sqrt();
+        let c_new = if gamma > 1e-30 { r3_hat / gamma } else { 1.0 };
+        let s_new = if gamma > 1e-30 { r4 / gamma } else { 0.0 };
+
+        // Update direction vectors
+        let mut w_new = ParVector::zeros_like(b);
+        if gamma.abs() > 1e-30 {
+            for i in 0..n {
+                w_new.data[i] = (v_cur.data[i] - r1 * w_prev.data[i] - r2 * w_cur.data[i]) / gamma;
+            }
+        }
+
+        // Update solution: x += c_new * beta1 * ... * w_new
+        // In MINRES, the update is: x += (c_new * phi) * w_new
+        // where phi tracks the residual components
+        let _phi = c_new * res_norm * b_norm;
+        // Actually, simplified MINRES update:
+        let tau = c_new * beta1;
+        for i in 0..n { x.data[i] += tau * w_new.data[i]; }
+
+        // Update residual norm
+        res_norm = s_new.abs() * res_norm;
+        beta1 = s_new * beta1;
+
+        if cfg.verbose && x.comm().is_root() {
+            log::info!("par_minres iter {}: residual = {:.3e}", iter + 1, res_norm / b_norm);
+        }
+
+        if res_norm / b_norm < cfg.rtol || res_norm < cfg.atol {
+            return Ok(SolveResult {
+                converged: true,
+                iterations: iter + 1,
+                final_residual: res_norm / b_norm,
+            });
+        }
+
+        // Prepare for next iteration
+        if beta_next.abs() > 1e-30 {
+            for i in 0..v_new.len() { v_new.data[i] /= beta_next; }
+        }
+
+        // Shift vectors
+        std::mem::swap(&mut v_old, &mut v_cur);
+        std::mem::swap(&mut v_cur, &mut v_new);
+        v_new = ParVector::zeros_like(b);
+
+        std::mem::swap(&mut w_prev, &mut w_cur);
+        w_cur = w_new;
+
+        _beta_prev = beta_cur;
+        beta_cur = beta_next;
+        c_old = c_cur;
+        c_cur = c_new;
+        s_old = s_cur;
+        s_cur = s_new;
+    }
+
+    // Compute true residual
+    let mut true_r = b.clone_vec();
+    let mut true_ax = ParVector::zeros_like(b);
+    a.spmv(x, &mut true_ax);
+    for i in 0..n { true_r.data[i] = b.data[i] - true_ax.data[i]; }
+    let final_res = true_r.global_norm() / b_norm;
+
+    Ok(SolveResult {
+        converged: false,
+        iterations: cfg.max_iter,
+        final_residual: final_res,
+    })
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

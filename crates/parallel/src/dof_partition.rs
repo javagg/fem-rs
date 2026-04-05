@@ -6,7 +6,9 @@
 
 use std::collections::HashMap;
 use fem_core::Rank;
+use fem_mesh::topology::MeshTopology;
 use fem_space::dof_manager::{DofManager, EdgeKey};
+use fem_space::fe_space::FESpace;
 use crate::comm::Comm;
 use crate::partition::MeshPartition;
 
@@ -49,6 +51,18 @@ pub struct DofPartition {
     /// Inverse permutation: `partition_to_dm[partition_local_id] = dm_local_id`.
     /// Empty for P1 (identity permutation).
     pub(crate) partition_to_dm: Vec<u32>,
+    /// Per-DOF sign correction (±1.0) for H(curl)/H(div) edge spaces.
+    ///
+    /// For vector FE spaces the basis function sign depends on the local
+    /// vertex ordering which may disagree with the canonical global ordering
+    /// after mesh partitioning.  `sign_corrections[dm_local_id]` is `+1.0`
+    /// when the local sign agrees with the global convention and `−1.0`
+    /// otherwise.  Empty when no correction is needed (P1, P2, serial).
+    ///
+    /// Callers that permute matrix/vector data must apply
+    /// `val *= sign_correction(row) * sign_correction(col)` (matrix) or
+    /// `val *= sign_correction(i)` (vector) during permutation.
+    pub(crate) sign_corrections: Vec<f64>,
 }
 
 impl DofPartition {
@@ -76,6 +90,7 @@ impl DofPartition {
             dof_global_to_local,
             dm_to_partition: Vec::new(), // identity for P1
             partition_to_dm: Vec::new(),
+            sign_corrections: Vec::new(),
         }
     }
 
@@ -226,6 +241,198 @@ impl DofPartition {
             dof_global_to_local,
             dm_to_partition,
             partition_to_dm,
+            sign_corrections: Vec::new(), // P2 H1 DOFs are sign-invariant
+        }
+    }
+
+    /// Build a DOF partition for an edge-DOF-only space (H(curl) or H(div) 2D).
+    ///
+    /// For H(curl) ND1 and H(div) RT0 on triangles, DOFs are edges — no vertex DOFs.
+    /// Edge ownership: `owner(edge(a,b)) = min(owner(a), owner(b))`.
+    ///
+    /// The permutation maps from the serial space's DOF ordering (edge enum order)
+    /// to the partition layout: `[owned_edges | ghost_edges]`.
+    ///
+    /// **Sign corrections** — H(curl) / H(div) basis functions carry a sign that
+    /// depends on the local vertex ordering (`nodes[li] < nodes[lj]`).  After
+    /// mesh partitioning, local vertex IDs can disagree with the canonical
+    /// global ordering, flipping the sign on some edges.  This method computes
+    /// a per-DOF correction `d_i = global_sign / local_sign ∈ {-1, +1}` and
+    /// stores it in [`DofPartition::sign_corrections`] so that callers can
+    /// transform to the globally consistent basis during permutation.
+    pub fn from_edge_space<S: FESpace>(
+        space: &S,
+        partition: &MeshPartition,
+        comm: &Comm,
+    ) -> Self
+    where
+        S::Mesh: MeshTopology,
+    {
+        let local_rank = comm.rank();
+        let mesh = space.mesh();
+        let n_space_dofs = space.n_dofs();
+
+        let dim = mesh.dim() as usize;
+
+        // Edge tables matching HCurlSpace / HDivSpace element ordering.
+        let hcurl_2d: Vec<(usize, usize)> = vec![(0, 1), (1, 2), (0, 2)];
+        let hdiv_2d: Vec<(usize, usize)> = vec![(1, 2), (0, 2), (0, 1)];
+        let hcurl_3d: Vec<(usize, usize)> = vec![
+            (0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3),
+        ];
+
+        let space_type = space.space_type();
+
+        let edges_for_space: &[(usize, usize)] = match (space_type, dim) {
+            (fem_space::fe_space::SpaceType::HCurl, 2) => &hcurl_2d,
+            (fem_space::fe_space::SpaceType::HDiv, 2)  => &hdiv_2d,
+            (fem_space::fe_space::SpaceType::HCurl, 3) => &hcurl_3d,
+            _ => &hcurl_2d,
+        };
+
+        // ── Step 1: Map each DOF to its canonical edge and compute sign ────────
+        //
+        // For each DOF we record:
+        //   - The canonical (min, max) global node pair.
+        //   - The sign correction d_i = global_sign / local_sign.
+        //
+        // The sign convention used by HCurlSpace / HDivSpace is:
+        //   sign = if nodes[li] < nodes[lj] { +1 } else { -1 }
+        // where nodes[li], nodes[lj] are LOCAL vertex IDs from element_nodes().
+        //
+        // The canonical global sign for the same edge is:
+        //   global_sign = if ga < gb { +1 } else { -1 }
+        // where ga, gb are the GLOBAL vertex IDs.
+
+        let mut dof_to_edge: HashMap<u32, (u32, u32)> = HashMap::new();
+        let mut sign_corr: Vec<f64> = vec![1.0; n_space_dofs];
+
+        for e in mesh.elem_iter() {
+            let dofs = space.element_dofs(e);
+            let nodes = mesh.element_nodes(e);
+
+            for (i, &(a, b)) in edges_for_space.iter().enumerate() {
+                if i >= dofs.len() { break; }
+                let dof_id = dofs[i];
+                if dof_to_edge.contains_key(&dof_id) {
+                    continue; // already recorded from an earlier element
+                }
+
+                let local_a = nodes[a];
+                let local_b = nodes[b];
+                let ga = partition.global_node(local_a);
+                let gb = partition.global_node(local_b);
+
+                dof_to_edge.insert(dof_id, (ga.min(gb), ga.max(gb)));
+
+                // Sign correction: local_sign * d = global_sign, so d = global_sign / local_sign.
+                let local_sign: f64 = if local_a < local_b { 1.0 } else { -1.0 };
+                let global_sign: f64 = if ga < gb { 1.0 } else { -1.0 };
+                sign_corr[dof_id as usize] = global_sign / local_sign;
+            }
+        }
+
+        // ── Step 2: Classify DOFs as owned or ghost ────────────────────────────
+        let mut owned_edges: Vec<EdgeDofInfo> = Vec::new();
+        let mut ghost_edges: Vec<EdgeDofInfo> = Vec::new();
+
+        // Build global-to-local node map for ownership lookup.
+        let n_total_nodes = (partition.n_owned_nodes + partition.n_ghost_nodes) as u32;
+        let mut global_to_local_node: HashMap<u32, u32> = HashMap::new();
+        for lid in 0..n_total_nodes {
+            global_to_local_node.insert(partition.global_node(lid), lid);
+        }
+
+        for (&dof_id, &(ga, gb)) in &dof_to_edge {
+            let owner_a = global_to_local_node.get(&ga)
+                .map(|&lid| partition.node_owner(lid))
+                .unwrap_or(Rank::MAX);
+            let owner_b = global_to_local_node.get(&gb)
+                .map(|&lid| partition.node_owner(lid))
+                .unwrap_or(Rank::MAX);
+            let edge_owner = owner_a.min(owner_b);
+
+            let info = EdgeDofInfo {
+                local_dof_id: dof_id,
+                global_node_a: ga,
+                global_node_b: gb,
+                owner: edge_owner,
+            };
+
+            if edge_owner == local_rank {
+                owned_edges.push(info);
+            } else {
+                ghost_edges.push(info);
+            }
+        }
+
+        // Deterministic ordering by sorted global node pair.
+        owned_edges.sort_by_key(|e| (e.global_node_a, e.global_node_b));
+        ghost_edges.sort_by_key(|e| (e.global_node_a, e.global_node_b));
+
+        let n_owned = owned_edges.len();
+        let n_ghost = ghost_edges.len();
+        let total = n_owned + n_ghost;
+
+        debug_assert_eq!(total, n_space_dofs,
+            "from_edge_space: partition found {} DOFs but space has {} DOFs",
+            total, n_space_dofs,
+        );
+
+        // ── Step 3: Compute global offsets ─────────────────────────────────────
+        let global_dof_offset = exclusive_scan_i64(comm, n_owned as i64) as usize;
+        let edge_offset = global_dof_offset as u32;
+
+        // ── Step 4: Build global DOF IDs ───────────────────────────────────────
+        let mut global_dof_ids = Vec::with_capacity(total);
+        let mut dof_owner_vec = Vec::with_capacity(total);
+
+        let mut owned_edge_global_map: HashMap<(u32, u32), u32> = HashMap::new();
+        for (i, edge) in owned_edges.iter().enumerate() {
+            let gid = edge_offset + i as u32;
+            global_dof_ids.push(gid);
+            dof_owner_vec.push(local_rank);
+            owned_edge_global_map.insert((edge.global_node_a, edge.global_node_b), gid);
+        }
+
+        let ghost_edge_gids = exchange_ghost_edge_ids(
+            &ghost_edges, &owned_edge_global_map, comm,
+        );
+        for (i, edge) in ghost_edges.iter().enumerate() {
+            global_dof_ids.push(ghost_edge_gids[i]);
+            dof_owner_vec.push(edge.owner);
+        }
+
+        // ── Step 5: Build permutation ──────────────────────────────────────────
+        let mut dm_to_partition = vec![0u32; n_space_dofs];
+        let mut partition_to_dm = vec![0u32; n_space_dofs];
+
+        for (i, edge) in owned_edges.iter().enumerate() {
+            dm_to_partition[edge.local_dof_id as usize] = i as u32;
+        }
+        for (i, edge) in ghost_edges.iter().enumerate() {
+            dm_to_partition[edge.local_dof_id as usize] = (n_owned + i) as u32;
+        }
+        for (dm_id, &part_id) in dm_to_partition.iter().enumerate() {
+            partition_to_dm[part_id as usize] = dm_id as u32;
+        }
+
+        let dof_global_to_local: HashMap<u32, u32> = global_dof_ids
+            .iter()
+            .enumerate()
+            .map(|(lid, &gid)| (gid, lid as u32))
+            .collect();
+
+        DofPartition {
+            n_owned_dofs: n_owned,
+            n_ghost_dofs: n_ghost,
+            global_dof_ids,
+            dof_owner: dof_owner_vec,
+            global_dof_offset,
+            dof_global_to_local,
+            dm_to_partition,
+            partition_to_dm,
+            sign_corrections: sign_corr,
         }
     }
 
@@ -255,6 +462,28 @@ impl DofPartition {
     #[inline]
     pub fn needs_permutation(&self) -> bool {
         !self.dm_to_partition.is_empty()
+    }
+
+    /// `true` if sign corrections must be applied during permutation.
+    ///
+    /// This is the case for H(curl)/H(div) spaces where the local mesh's
+    /// vertex ordering may disagree with the canonical global ordering,
+    /// causing edge basis function signs to flip.
+    #[inline]
+    pub fn needs_sign_correction(&self) -> bool {
+        !self.sign_corrections.is_empty()
+    }
+
+    /// Sign correction factor (±1.0) for a DofManager-local DOF.
+    ///
+    /// Returns `+1.0` if no correction is needed (P1, P2, or matching signs).
+    #[inline]
+    pub fn sign_correction(&self, dm_local_id: u32) -> f64 {
+        if self.sign_corrections.is_empty() {
+            1.0
+        } else {
+            self.sign_corrections[dm_local_id as usize]
+        }
     }
 
     /// Map a DofManager local DOF ID to the partition's local DOF ID.

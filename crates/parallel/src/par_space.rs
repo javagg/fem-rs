@@ -61,6 +61,20 @@ where
         Self::finish(local_space, dof_partition, &comm)
     }
 
+    /// Build a parallel FE space for edge-DOF-only spaces (H(curl), H(div) 2D).
+    ///
+    /// Uses edge-based DOF partitioning where `owner(edge) = min(owner(endpoints))`.
+    pub fn new_for_edge_space<M: MeshTopology>(
+        local_space: S,
+        par_mesh: &ParallelMesh<M>,
+        comm: Comm,
+    ) -> Self {
+        let dof_partition = DofPartition::from_edge_space(
+            &local_space, par_mesh.partition(), &comm,
+        );
+        Self::finish(local_space, dof_partition, &comm)
+    }
+
     /// Common construction: build ghost exchange and count global DOFs.
     fn finish(local_space: S, dof_partition: DofPartition, comm: &Comm) -> Self {
         let dof_ghost_exchange = Arc::new(build_dof_ghost_exchange(&dof_partition, comm));

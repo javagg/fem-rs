@@ -89,6 +89,18 @@ path = "ex16_nonlinear_heat.rs"
 name = "pex1_poisson"
 path = "pex1_poisson.rs"
 
+[[example]]
+name = "pex2_mixed_darcy"
+path = "pex2_mixed_darcy.rs"
+
+[[example]]
+name = "pex3_maxwell"
+path = "pex3_maxwell.rs"
+
+[[example]]
+name = "pex5_darcy"
+path = "pex5_darcy.rs"
+
 [lib]
 name = "fem_examples"
 path = "src/lib.rs"
