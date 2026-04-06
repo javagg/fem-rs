@@ -31,7 +31,7 @@
 |---|---|---|---|
 | `Mesh` (2D/3D unstructured) | `SimplexMesh<D>` | ✅ | Uniform element type per mesh |
 | `Mesh` (mixed elements) | `SimplexMesh<D>` + `elem_types`/`elem_offsets` | 🔨 | Phase 42a: data structures + I/O done |
-| `NCMesh` (non-conforming) | `refine_nonconforming()` + `HangingNodeConstraint` | 🔨 | Single-level 2-D Tri3; multi-level TBD |
+| `NCMesh` (non-conforming) | `refine_nonconforming()` + `HangingNodeConstraint` + `NCState` | 🔨 | 2-D Tri3 multi-level constraints; 3-D hanging faces TBD |
 | `ParMesh` | `ParallelMesh<M>` | ✅ | Phase 10+33 |
 | `Mesh::GetNV()` | `MeshTopology::n_nodes()` | ✅ | |
 | `Mesh::GetNE()` | `MeshTopology::n_elements()` | ✅ | |
@@ -680,16 +680,16 @@ prioritized roadmap for continued development.
 - ✅ `SetSubVector` / `GetSubVector` were already implemented — marked in MFEM_MAPPING
 
 ### Phase 47 — NCMesh (Non-Conforming Mesh / Hanging Nodes) 🔨
-> **Partial** — single-level 2-D Tri3 implemented; multi-level constraint tree TBD
+> **Partial** — 2-D Tri3 single/multi-level implemented; 3-D hanging faces TBD
 
 - ✅ `refine_nonconforming()` — red-refines only marked elements, no propagation
 - ✅ `HangingNodeConstraint` detection — identifies midpoints on coarse/fine edges
 - ✅ `apply_hanging_constraints()` — P^T K P static condensation via COO rebuild
 - ✅ `recover_hanging_values()` — post-solve interpolation for constrained DOFs
+- ✅ `NCState` multi-level constraint tracking — carries and resolves hanging constraints across successive NC refinements
+- ✅ `prolongate_p2_hanging()` — P2 hanging-node prolongation by coarse P2 field evaluation at fine DOF coordinates
 - ✅ `ex15_dg_amr --nc` — demonstrates single-level NC AMR with error reduction
-- 🔲 Multi-level constraint tree (accumulate constraints across refinement levels)
 - 🔲 3-D support (Tet4 hanging faces)
-- 🔲 P2 hanging-node interpolation
 
 ### Backlog (Low Priority)
 | Item | Phase | Notes |

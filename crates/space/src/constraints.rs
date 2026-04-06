@@ -10,6 +10,7 @@
 use fem_core::types::DofId;
 use fem_linalg::{CooMatrix, CsrMatrix};
 use fem_mesh::amr::HangingNodeConstraint;
+use fem_mesh::topology::MeshTopology;
 
 use crate::dof_manager::{DofManager, EdgeKey, FaceKey};
 use crate::hcurl::HCurlSpace;
@@ -327,12 +328,98 @@ pub fn recover_hanging_values(
     }
 }
 
+/// Prolongate an H1-P2 solution from a coarse Tri3 mesh to a refined Tri3 mesh.
+///
+/// The coarse P2 field is evaluated at every fine-space DOF coordinate using
+/// the coarse element P2 basis, which works for hanging-node refinement and
+/// multi-level NC refinement chains.
+pub fn prolongate_p2_hanging<M: MeshTopology>(
+    coarse_mesh: &M,
+    coarse_dm: &DofManager,
+    fine_dm: &DofManager,
+    u_coarse: &[f64],
+) -> Vec<f64> {
+    assert_eq!(coarse_dm.order, 2, "prolongate_p2_hanging: coarse_dm must be P2");
+    assert_eq!(fine_dm.order, 2, "prolongate_p2_hanging: fine_dm must be P2");
+    assert_eq!(coarse_mesh.dim(), 2, "prolongate_p2_hanging: only 2-D supported");
+    assert_eq!(u_coarse.len(), coarse_dm.n_dofs, "u_coarse length mismatch");
+
+    let mut u_fine = vec![0.0_f64; fine_dm.n_dofs];
+    let n_coarse_elems = coarse_mesh.n_elements() as u32;
+
+    for dof in 0..fine_dm.n_dofs as u32 {
+        let c = fine_dm.dof_coord(dof);
+        let px = c[0];
+        let py = c[1];
+
+        let mut val = None;
+        for e in 0..n_coarse_elems {
+            let ns = coarse_mesh.element_nodes(e);
+            if ns.len() < 3 {
+                continue;
+            }
+
+            let c0 = coarse_mesh.node_coords(ns[0]);
+            let c1 = coarse_mesh.node_coords(ns[1]);
+            let c2 = coarse_mesh.node_coords(ns[2]);
+
+            let x0 = c0[0]; let y0 = c0[1];
+            let x1 = c1[0]; let y1 = c1[1];
+            let x2 = c2[0]; let y2 = c2[1];
+
+            let det = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+            if det.abs() < 1e-14 {
+                continue;
+            }
+
+            let l1 = ((px - x0) * (y2 - y0) - (x2 - x0) * (py - y0)) / det;
+            let l2 = ((x1 - x0) * (py - y0) - (px - x0) * (y1 - y0)) / det;
+            let l0 = 1.0 - l1 - l2;
+
+            let eps = 1e-10;
+            if l0 < -eps || l1 < -eps || l2 < -eps {
+                continue;
+            }
+
+            let edofs = coarse_dm.element_dofs(e);
+            if edofs.len() < 6 {
+                continue;
+            }
+
+            // P2 basis on triangle in barycentric coordinates.
+            let n0 = l0 * (2.0 * l0 - 1.0);
+            let n1 = l1 * (2.0 * l1 - 1.0);
+            let n2 = l2 * (2.0 * l2 - 1.0);
+            let n3 = 4.0 * l0 * l1;
+            let n4 = 4.0 * l1 * l2;
+            let n5 = 4.0 * l0 * l2;
+
+            val = Some(
+                n0 * u_coarse[edofs[0] as usize]
+                    + n1 * u_coarse[edofs[1] as usize]
+                    + n2 * u_coarse[edofs[2] as usize]
+                    + n3 * u_coarse[edofs[3] as usize]
+                    + n4 * u_coarse[edofs[4] as usize]
+                    + n5 * u_coarse[edofs[5] as usize]
+            );
+            break;
+        }
+
+        u_fine[dof as usize] = val.unwrap_or_else(|| {
+            panic!("prolongate_p2_hanging: fine DOF {dof} lies outside coarse mesh")
+        });
+    }
+
+    u_fine
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::fe_space::FESpace;
+    use crate::DofManager;
     use fem_linalg::CooMatrix;
-    use fem_mesh::SimplexMesh;
+    use fem_mesh::{SimplexMesh, amr::NCState};
 
     fn simple_system() -> (CsrMatrix<f64>, Vec<f64>) {
         let mut coo = CooMatrix::<f64>::new(3, 3);
@@ -560,5 +647,35 @@ mod tests {
         // Boundary conditions should hold.
         assert!(x[0].abs() < 1e-10, "x[0] = {}, expected 0", x[0]);
         assert!(x[4].abs() < 1e-10, "x[4] = {}, expected 0", x[4]);
+    }
+
+    #[test]
+    fn prolongate_p2_hanging_is_exact_for_quadratic() {
+        let coarse = SimplexMesh::<2>::unit_square_tri(2);
+        let coarse_dm = DofManager::new(&coarse, 2);
+
+        let f = |x: f64, y: f64| -> f64 { x * x + x * y + y * y + 2.0 * x - y + 1.0 };
+        let mut u_coarse = vec![0.0_f64; coarse_dm.n_dofs];
+        for d in 0..coarse_dm.n_dofs as u32 {
+            let c = coarse_dm.dof_coord(d);
+            u_coarse[d as usize] = f(c[0], c[1]);
+        }
+
+        let mut nc = NCState::new();
+        let (fine, _, _) = nc.refine(&coarse, &[0, 1, 2]);
+        let fine_dm = DofManager::new(&fine, 2);
+
+        let u_fine = prolongate_p2_hanging(&coarse, &coarse_dm, &fine_dm, &u_coarse);
+
+        for d in 0..fine_dm.n_dofs as u32 {
+            let c = fine_dm.dof_coord(d);
+            let expected = f(c[0], c[1]);
+            assert!(
+                (u_fine[d as usize] - expected).abs() < 1e-10,
+                "dof {d}: got {}, expected {}",
+                u_fine[d as usize],
+                expected
+            );
+        }
     }
 }
