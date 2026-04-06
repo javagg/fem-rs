@@ -5,8 +5,8 @@
 //! 2. **Zienkiewicz–Zhu (ZZ) error estimator** — gradient recovery-based element error.
 //! 3. **Dörfler (bulk) marking** — marks a minimal subset of elements whose
 //!    estimated errors sum to at least θ of the global error.
-//! 4. **Hanging-node constraints** (2-D only) — stores the linear constraint
-//!    equations arising from conforming refinement.
+//! 4. **Hanging-node constraints** (2-D/3-D) — stores linear constraint
+//!    equations for non-conforming refinement interfaces.
 //!
 //! # Usage
 //! ```rust,ignore
@@ -198,6 +198,53 @@ pub struct NCState {
     /// Set of edges that currently have a midpoint (edge_key → midpoint node).
     /// Used to detect when a previous hanging node gets resolved.
     active_midpoints: HashMap<(NodeId, NodeId), NodeId>,
+}
+
+/// Accumulated state for multi-level non-conforming refinement in 3-D Tet4 meshes.
+///
+/// Tracks active edge midpoints across successive refinement levels and rebuilds
+/// hanging-node constraints after each step.
+#[derive(Debug, Clone)]
+pub struct NCState3D {
+    /// All active hanging-node constraints (edge midpoint constraints).
+    constraints: Vec<HangingNodeConstraint>,
+    /// Set of edges that currently have a midpoint (edge_key -> midpoint node).
+    active_midpoints: HashMap<(NodeId, NodeId), NodeId>,
+}
+
+impl NCState3D {
+    /// Create an empty 3-D NC state for a conforming initial mesh.
+    pub fn new() -> Self {
+        Self {
+            constraints: Vec::new(),
+            active_midpoints: HashMap::new(),
+        }
+    }
+
+    /// Current hanging-node constraints (for use with `apply_hanging_constraints`).
+    pub fn constraints(&self) -> &[HangingNodeConstraint] {
+        &self.constraints
+    }
+
+    /// Perform one level of non-conforming refinement for Tet4 meshes.
+    ///
+    /// Returns `(new_mesh, constraints, midpoint_map, hanging_faces)`.
+    pub fn refine(
+        &mut self,
+        mesh: &SimplexMesh<3>,
+        marked: &[ElemId],
+    ) -> (
+        SimplexMesh<3>,
+        Vec<HangingNodeConstraint>,
+        HashMap<(NodeId, NodeId), NodeId>,
+        Vec<HangingFaceConstraint>,
+    ) {
+        let (new_mesh, constraints, hanging_faces, midpoint_map, new_active_midpoints) =
+            refine_nonconforming_3d_internal(mesh, marked, Some(&self.active_midpoints));
+        self.constraints = constraints.clone();
+        self.active_midpoints = new_active_midpoints;
+        (new_mesh, constraints, midpoint_map, hanging_faces)
+    }
 }
 
 impl NCState {
@@ -825,13 +872,17 @@ fn longest_edge_tri(mesh: &SimplexMesh<2>, ns: &[NodeId]) -> (NodeId, NodeId) {
 
 // ─── 3-D (Tet4) Support ──────────────────────────────────────────────────────
 
-/// A hanging-face constraint (3-D): `u[constrained] = (1/3)*(u[parent_a] + u[parent_b] + u[parent_c])`.
-/// The constrained node is the face center (midpoint) of a Tet4 triangular face.
+/// A hanging-face descriptor in 3-D.
+///
+/// This records a coarse triangular face `(parent_a, parent_b, parent_c)` that is
+/// non-conforming against a refined neighbor. `constrained` stores a representative
+/// midpoint node on that face (for stable sorting / debugging), while edge midpoint
+/// constraints are provided via `HangingNodeConstraint`.
 #[derive(Debug, Clone)]
 pub struct HangingFaceConstraint {
-    /// The constrained (hanging) face center node DOF index.
+    /// Representative midpoint node on the hanging face.
     pub constrained: usize,
-    /// The three parent node DOF indices (the face vertices).
+    /// Coarse face vertex node indices.
     pub parent_a: usize,
     pub parent_b: usize,
     pub parent_c: usize,
@@ -865,13 +916,33 @@ pub fn refine_nonconforming_3d(
     mesh: &SimplexMesh<3>,
     marked: &[ElemId],
 ) -> (SimplexMesh<3>, Vec<HangingNodeConstraint>, Vec<HangingFaceConstraint>) {
+    let (new_mesh, edge_constraints, face_constraints, _, _) =
+        refine_nonconforming_3d_internal(mesh, marked, None);
+    (new_mesh, edge_constraints, face_constraints)
+}
+
+fn refine_nonconforming_3d_internal(
+    mesh: &SimplexMesh<3>,
+    marked: &[ElemId],
+    active_midpoints: Option<&HashMap<(NodeId, NodeId), NodeId>>,
+) -> (
+    SimplexMesh<3>,
+    Vec<HangingNodeConstraint>,
+    Vec<HangingFaceConstraint>,
+    HashMap<(NodeId, NodeId), NodeId>,
+    HashMap<(NodeId, NodeId), NodeId>,
+) {
     assert!(
         mesh.elem_type == ElementType::Tet4,
         "refine_nonconforming_3d: only Tet4 meshes are supported"
     );
 
     if marked.is_empty() {
-        return (mesh.clone(), Vec::new(), Vec::new());
+        let mut active = HashMap::new();
+        if let Some(prev) = active_midpoints {
+            active = prev.clone();
+        }
+        return (mesh.clone(), Vec::new(), Vec::new(), HashMap::new(), active);
     }
 
     let marked_set: std::collections::HashSet<ElemId> = marked.iter().copied().collect();
@@ -879,7 +950,6 @@ pub fn refine_nonconforming_3d(
 
     // ── 1. Build face → adjacent element list (for Tet4, each element has 4 faces) ──
     let mut face_elems: HashMap<(NodeId, NodeId, NodeId), Vec<ElemId>> = HashMap::new();
-    let mut edge_elems_3d: HashMap<(NodeId, NodeId), Vec<ElemId>> = HashMap::new();
 
     for e in 0..n_elems as ElemId {
         let ns = mesh.elem_nodes(e);
@@ -890,16 +960,10 @@ pub fn refine_nonconforming_3d(
             face_elems.entry(key).or_default().push(e);
         }
 
-        // Record edges (for edge midpoint creation)
-        for &(i, j) in &local_edges_tet() {
-            let key = edge_key(ns[i], ns[j]);
-            edge_elems_3d.entry(key).or_default().push(e);
-        }
     }
 
     // ── 2. Create midpoint nodes for marked elements ───────────────────────────
     let mut edge_midpoint_map: HashMap<(NodeId, NodeId), NodeId> = HashMap::new();
-    let mut face_center_map: HashMap<(NodeId, NodeId, NodeId), NodeId> = HashMap::new();
     let mut new_coords: Vec<f64> = mesh.coords.clone();
     let mut next_node = mesh.n_nodes() as NodeId;
 
@@ -910,30 +974,18 @@ pub fn refine_nonconforming_3d(
         for (i, j) in local_edges_tet() {
             let key = edge_key(ns[i], ns[j]);
             edge_midpoint_map.entry(key).or_insert_with(|| {
-                let xa = mesh.coords_of(ns[i]);
-                let xb = mesh.coords_of(ns[j]);
-                new_coords.push(0.5 * (xa[0] + xb[0]));
-                new_coords.push(0.5 * (xa[1] + xb[1]));
-                new_coords.push(0.5 * (xa[2] + xb[2]));
-                let id = next_node;
-                next_node += 1;
-                id
-            });
-        }
-
-        // Create face centers
-        for (a, b, c) in local_faces_tet() {
-            let key = face_key_3d(ns[a], ns[b], ns[c]);
-            face_center_map.entry(key).or_insert_with(|| {
-                let xa = mesh.coords_of(ns[a]);
-                let xb = mesh.coords_of(ns[b]);
-                let xc = mesh.coords_of(ns[c]);
-                new_coords.push((xa[0] + xb[0] + xc[0]) / 3.0);
-                new_coords.push((xa[1] + xb[1] + xc[1]) / 3.0);
-                new_coords.push((xa[2] + xb[2] + xc[2]) / 3.0);
-                let id = next_node;
-                next_node += 1;
-                id
+                if let Some(prev) = active_midpoints.and_then(|m| m.get(&key)) {
+                    *prev
+                } else {
+                    let xa = mesh.coords_of(ns[i]);
+                    let xb = mesh.coords_of(ns[j]);
+                    new_coords.push(0.5 * (xa[0] + xb[0]));
+                    new_coords.push(0.5 * (xa[1] + xb[1]));
+                    new_coords.push(0.5 * (xa[2] + xb[2]));
+                    let id = next_node;
+                    next_node += 1;
+                    id
+                }
             });
         }
     }
@@ -947,8 +999,7 @@ pub fn refine_nonconforming_3d(
         let tag = mesh.elem_tags[e as usize];
 
         if marked_set.contains(&e) {
-            // Red refinement: split Tet4 into 8 children.
-            // Each edge midpoint and face center are already created.
+            // Red refinement: split Tet4 into 8 children using edge midpoints.
             let n0 = ns[0]; let n1 = ns[1]; let n2 = ns[2]; let n3 = ns[3];
 
             let m01 = *edge_midpoint_map.get(&edge_key(n0, n1)).unwrap();
@@ -958,17 +1009,17 @@ pub fn refine_nonconforming_3d(
             let m13 = *edge_midpoint_map.get(&edge_key(n1, n3)).unwrap();
             let m23 = *edge_midpoint_map.get(&edge_key(n2, n3)).unwrap();
 
-            // 8 corner tets: one at each original vertex
+            // 4 corner tets.
             new_conn.extend_from_slice(&[n0, m01, m02, m03]); new_tags.push(tag);
             new_conn.extend_from_slice(&[n1, m01, m12, m13]); new_tags.push(tag);
             new_conn.extend_from_slice(&[n2, m02, m12, m23]); new_tags.push(tag);
             new_conn.extend_from_slice(&[n3, m03, m13, m23]); new_tags.push(tag);
 
-            // 4 edge tets: one on each edge
-            new_conn.extend_from_slice(&[m01, m02, m03, m12]); new_tags.push(tag);
-            new_conn.extend_from_slice(&[m02, m01, m12, m23]); new_tags.push(tag);
-            new_conn.extend_from_slice(&[m03, m01, m13, m23]); new_tags.push(tag);
-            new_conn.extend_from_slice(&[m13, m12, m23, m03]); new_tags.push(tag);
+            // 4 tets splitting the central octahedron.
+            new_conn.extend_from_slice(&[m01, m02, m03, m23]); new_tags.push(tag);
+            new_conn.extend_from_slice(&[m01, m02, m12, m23]); new_tags.push(tag);
+            new_conn.extend_from_slice(&[m01, m12, m13, m23]); new_tags.push(tag);
+            new_conn.extend_from_slice(&[m01, m03, m13, m23]); new_tags.push(tag);
         } else {
             // Unrefined element: keep as is
             for k in 0..4 {
@@ -978,38 +1029,151 @@ pub fn refine_nonconforming_3d(
         }
     }
 
-    // ── 4. Detect hanging face constraints ─────────────────────────────────────
-    // A face center is hanging if the parent face exists in the new mesh
-    // (meaning one of its adjacent tets is not refined).
-    let new_n_elems = new_tags.len();
-    let mut new_face_elems: HashMap<(NodeId, NodeId, NodeId), Vec<u32>> = HashMap::new();
+    // ── 4. Detect hanging faces and derive hanging-node edge constraints ───────
+    let mut face_constraints: Vec<HangingFaceConstraint> = Vec::new();
+    let mut edge_constraints: Vec<HangingNodeConstraint> = Vec::new();
 
-    for e in 0..new_n_elems as u32 {
-        let off = e as usize * 4;
-        let ns = &new_conn[off..off + 4];
-        for (a, b, c) in local_faces_tet() {
-            let key = face_key_3d(ns[a], ns[b], ns[c]);
-            new_face_elems.entry(key).or_default().push(e);
+    for (&(a, b, c), adj) in &face_elems {
+        if adj.len() != 2 {
+            continue;
+        }
+        let refined_count = adj.iter().filter(|&&e| marked_set.contains(&e)).count();
+        if refined_count != 1 {
+            continue;
+        }
+
+        let eab = edge_key(a, b);
+        let ebc = edge_key(b, c);
+        let eac = edge_key(a, c);
+
+        let mab = match edge_midpoint_map.get(&eab) {
+            Some(v) => *v,
+            None => continue,
+        };
+        let mbc = match edge_midpoint_map.get(&ebc) {
+            Some(v) => *v,
+            None => continue,
+        };
+        let mac = match edge_midpoint_map.get(&eac) {
+            Some(v) => *v,
+            None => continue,
+        };
+
+        edge_constraints.push(HangingNodeConstraint {
+            constrained: mab as usize,
+            parent_a: a as usize,
+            parent_b: b as usize,
+        });
+        edge_constraints.push(HangingNodeConstraint {
+            constrained: mbc as usize,
+            parent_a: b as usize,
+            parent_b: c as usize,
+        });
+        edge_constraints.push(HangingNodeConstraint {
+            constrained: mac as usize,
+            parent_a: a as usize,
+            parent_b: c as usize,
+        });
+
+        face_constraints.push(HangingFaceConstraint {
+            constrained: mab as usize,
+            parent_a: a as usize,
+            parent_b: b as usize,
+            parent_c: c as usize,
+        });
+    }
+
+    edge_constraints.sort_by_key(|c| c.constrained);
+    edge_constraints.dedup_by_key(|c| c.constrained);
+
+    face_constraints.sort_by_key(|c| (c.parent_a, c.parent_b, c.parent_c));
+    face_constraints.dedup_by_key(|c| (c.parent_a, c.parent_b, c.parent_c));
+
+    // Rebuild active midpoint set from previous + current, keeping only live nodes.
+    let mut new_active_midpoints = HashMap::new();
+    if let Some(prev) = active_midpoints {
+        for (&edge, &mid) in prev {
+            new_active_midpoints.insert(edge, mid);
+        }
+    }
+    for (&edge, &mid) in &edge_midpoint_map {
+        new_active_midpoints.insert(edge, mid);
+    }
+
+    let new_node_set: std::collections::HashSet<NodeId> = new_conn.iter().copied().collect();
+    new_active_midpoints.retain(|_, mid| new_node_set.contains(mid));
+
+    // Rebuild edge constraints from active midpoint map and current mesh topology.
+    let mut current_edge_set: std::collections::HashSet<(NodeId, NodeId)> =
+        std::collections::HashSet::new();
+    for e in 0..new_tags.len() as ElemId {
+        let ns = &new_conn[e as usize * 4..e as usize * 4 + 4];
+        for &(i, j) in &local_edges_tet() {
+            current_edge_set.insert(edge_key(ns[i], ns[j]));
         }
     }
 
-    let face_constraints = Vec::new();
+    let mut rebuilt_constraints = Vec::new();
+    for (&(a, b), &mid) in &new_active_midpoints {
+        if current_edge_set.contains(&edge_key(a, b)) {
+            rebuilt_constraints.push(HangingNodeConstraint {
+                constrained: mid as usize,
+                parent_a: a as usize,
+                parent_b: b as usize,
+            });
+        }
+    }
+    rebuilt_constraints.sort_by_key(|c| c.constrained);
+    rebuilt_constraints.dedup_by_key(|c| c.constrained);
 
-    // Check for hanging face centers (simplified for now; a full implementation
-    // would track which faces were bisected and determine hanging constraints).
-    // For now, we create the face centers as nodes but don't apply constraints yet.
+    // ── 5. Rebuild boundary triangular faces ──────────────────────────────────
+    let mut new_face_conn: Vec<NodeId> = Vec::new();
+    let mut new_face_tags: Vec<i32> = Vec::new();
+    let npf = 3usize;
+
+    for f in 0..mesh.n_faces() {
+        let fs = &mesh.face_conn[f * npf..(f + 1) * npf];
+        let a = fs[0];
+        let b = fs[1];
+        let c = fs[2];
+        let tag = mesh.face_tags[f];
+
+        let mab = edge_midpoint_map.get(&edge_key(a, b)).copied();
+        let mbc = edge_midpoint_map.get(&edge_key(b, c)).copied();
+        let mac = edge_midpoint_map.get(&edge_key(a, c)).copied();
+
+        if let (Some(mab), Some(mbc), Some(mac)) = (mab, mbc, mac) {
+            new_face_conn.extend_from_slice(&[a, mab, mac]);
+            new_face_tags.push(tag);
+            new_face_conn.extend_from_slice(&[b, mbc, mab]);
+            new_face_tags.push(tag);
+            new_face_conn.extend_from_slice(&[c, mac, mbc]);
+            new_face_tags.push(tag);
+            new_face_conn.extend_from_slice(&[mab, mbc, mac]);
+            new_face_tags.push(tag);
+        } else {
+            new_face_conn.extend_from_slice(&[a, b, c]);
+            new_face_tags.push(tag);
+        }
+    }
 
     let new_mesh = SimplexMesh::uniform(
         new_coords,
         new_conn,
         new_tags,
         ElementType::Tet4,
-        Vec::new(), // face_conn (3-D mesh doesn't use explicit boundary faces in SimplexMesh)
-        Vec::new(), // face_tags
+        new_face_conn,
+        new_face_tags,
         ElementType::Tri3,
     );
 
-    (new_mesh, Vec::new(), face_constraints)
+    (
+        new_mesh,
+        rebuilt_constraints,
+        face_constraints,
+        edge_midpoint_map,
+        new_active_midpoints,
+    )
 }
 
 /// Local edge pairs for Tet4 (6 edges).
@@ -1355,24 +1519,24 @@ mod tests {
         assert_eq!(refined.n_elems(), expected,
             "Expected {} elems, got {}", expected, refined.n_elems());
         
-        // Should create new midpoint nodes (6 edge midpoints + 4 face centers = 10 new nodes per refined tet).
+        // Should create new midpoint nodes.
         assert!(refined.n_nodes() > mesh.n_nodes(), "Refinement should add nodes");
 
-        // Edge constraints should be empty for now (simplified implementation).
-        assert_eq!(edge_constraints.len(), 0);
-        
-        // Face constraints may be empty or contain hanging faces.
-        let _ = face_constraints;
+        // One refined tet against its unrefined neighbors should produce hanging edges/faces.
+        assert!(!edge_constraints.is_empty(), "expected hanging edge constraints");
+        assert!(!face_constraints.is_empty(), "expected hanging face descriptors");
+
+        refined.check().unwrap();
     }
 
     #[test]
     fn tet4_nonconforming_refine_with_neighbor() {
-        // Create a 2-tet mesh and refine one, checking hanging face constraints.
+        // Refine one tet and verify non-conforming constraints are emitted.
         let mesh = SimplexMesh::<3>::unit_cube_tet(1);
         let n_elems_orig = mesh.n_elems();
 
         // Refine the first tet only.
-        let (refined, _edge_constr, face_constr) = refine_nonconforming_3d(&mesh, &[0]);
+        let (refined, edge_constr, face_constr) = refine_nonconforming_3d(&mesh, &[0]);
 
         // Should have 8 children from refined tet + (n_elems_orig - 1) unchanged.
         let expected_elems = 8 + (n_elems_orig - 1);
@@ -1382,9 +1546,8 @@ mod tests {
         // Nodes should increase (at minimum by 6 edge midpoints per refined tet).
         assert!(refined.n_nodes() >= mesh.n_nodes() + 6);
 
-        // Face constraints may exist if a refined tet's face is not refined in the neighbor.
-        // (Simplified implementation may not detect all hanging faces yet.)
-        let _ = face_constr;
+        assert!(!edge_constr.is_empty());
+        assert!(!face_constr.is_empty());
     }
 
     #[test]
@@ -1400,5 +1563,23 @@ mod tests {
         assert_eq!(constraint.parent_a, 0);
         assert_eq!(constraint.parent_b, 1);
         assert_eq!(constraint.parent_c, 2);
+    }
+
+    #[test]
+    fn ncstate3d_two_level_refine() {
+        let mesh = SimplexMesh::<3>::unit_cube_tet(1);
+        let mut nc3 = NCState3D::new();
+
+        let (m1, c1, _, f1) = nc3.refine(&mesh, &[0]);
+        assert!(m1.n_elems() > mesh.n_elems());
+        assert!(!c1.is_empty());
+        assert!(!f1.is_empty());
+        m1.check().unwrap();
+
+        // Refine a subset again; constraints should still be valid and mesh consistent.
+        let (m2, c2, _, _) = nc3.refine(&m1, &[0, 1]);
+        assert!(m2.n_elems() > m1.n_elems());
+        assert!(!c2.is_empty());
+        m2.check().unwrap();
     }
 }
