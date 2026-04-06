@@ -565,27 +565,17 @@ impl<const D: usize> SimplexMesh<D> {
                         nid(i+1, j+1, k+1), // 6: (1,1,1)
                         nid(i,   j+1, k+1), // 7: (0,1,1)
                     ];
-                    // Freudenthal 6-tet decomposition
+                    // Non-degenerate 6-tet cube split along diagonal v0 -> v6.
+                    // This avoids coplanar 4-point sets.
                     let tets: [[usize; 4]; 6] = [
-                        [0, 1, 3, 4],
-                        [1, 2, 3, 6],
-                        [3, 4, 6, 7],
-                        [4, 5, 6, 1],  // corrected orientation
-                        [1, 3, 4, 6],
-                        [4, 5, 6, 7],  // fix: use [4,5,6,7] instead of duplicate
+                        [0, 1, 2, 6],
+                        [0, 2, 3, 6],
+                        [0, 3, 7, 6],
+                        [0, 7, 4, 6],
+                        [0, 4, 5, 6],
+                        [0, 5, 1, 6],
                     ];
-                    // Use the standard 6-tet Kuhn decomposition instead:
-                    // (avoids the duplicate above)
-                    let kuhn: [[usize; 4]; 6] = [
-                        [0, 1, 2, 5],
-                        [0, 2, 3, 7],
-                        [0, 5, 2, 7],
-                        [0, 4, 5, 7],
-                        [2, 5, 6, 7],
-                        [0, 1, 5, 4],  // added to fill the cube
-                    ];
-                    let _ = tets; // superseded by kuhn
-                    for tet in &kuhn {
+                    for tet in &tets {
                         conn.extend_from_slice(&[v[tet[0]], v[tet[1]], v[tet[2]], v[tet[3]]]);
                         elem_tags.push(1i32);
                     }
@@ -747,6 +737,29 @@ mod tests {
         let m = SimplexMesh::<3>::unit_cube_tet(2);
         let tags = m.unique_boundary_tags();
         assert_eq!(tags, vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn unit_cube_tet_elements_non_degenerate() {
+        let m = SimplexMesh::<3>::unit_cube_tet(1);
+        for e in 0..m.n_elems() as ElemId {
+            let ns = m.elem_nodes(e);
+            assert_eq!(ns.len(), 4);
+
+            let x0 = m.coords_of(ns[0]);
+            let x1 = m.coords_of(ns[1]);
+            let x2 = m.coords_of(ns[2]);
+            let x3 = m.coords_of(ns[3]);
+
+            let j11 = x1[0] - x0[0]; let j12 = x2[0] - x0[0]; let j13 = x3[0] - x0[0];
+            let j21 = x1[1] - x0[1]; let j22 = x2[1] - x0[1]; let j23 = x3[1] - x0[1];
+            let j31 = x1[2] - x0[2]; let j32 = x2[2] - x0[2]; let j33 = x3[2] - x0[2];
+
+            let det = j11 * (j22 * j33 - j23 * j32)
+                - j12 * (j21 * j33 - j23 * j31)
+                + j13 * (j21 * j32 - j22 * j31);
+            assert!(det.abs() > 1e-12, "degenerate Tet4 at elem {e}, det={det}");
+        }
     }
 
     #[test]

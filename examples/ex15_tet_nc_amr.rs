@@ -8,10 +8,18 @@
 //! ```bash
 //! cargo run --example ex15_tet_nc_amr
 //! cargo run --example ex15_tet_nc_amr -- --n 2 --levels 4 --fraction 0.35
+//! cargo run --example ex15_tet_nc_amr -- --solve --levels 3
 //! ```
 
 use fem_core::ElemId;
 use fem_mesh::{SimplexMesh, NCState3D, prolongate_p1};
+use fem_mesh::topology::MeshTopology;
+use fem_assembly::{Assembler, standard::{DiffusionIntegrator, DomainSourceIntegrator}};
+use fem_solver::{solve_pcg_jacobi, SolverConfig};
+use fem_space::{H1Space, fe_space::FESpace};
+use fem_space::constraints::{apply_dirichlet, apply_hanging_constraints, recover_hanging_values, boundary_dofs};
+use fem_element::{ReferenceElement, lagrange::TetP1};
+use std::f64::consts::PI;
 
 fn main() {
     let args = parse_args();
@@ -19,6 +27,7 @@ fn main() {
     println!("=== fem-rs Example 15 (3-D): Tet4 Non-Conforming AMR ===");
     println!("  Initial mesh: {}x{}x{} Tet4", args.n0, args.n0, args.n0);
     println!("  Levels: {}, mark fraction: {:.2}", args.levels, args.fraction);
+    println!("  Mode: {}", if args.solve { "Poisson solve + NC AMR" } else { "NC AMR plumbing" });
     println!();
 
     let mut mesh = SimplexMesh::<3>::unit_cube_tet(args.n0);
@@ -27,16 +36,28 @@ fn main() {
     // Linear field used to verify P1 prolongation exactness.
     let mut u = nodal_linear_field(&mesh);
 
-    println!("{:>5}  {:>8}  {:>8}  {:>8}  {:>10}",
-             "Level", "Elems", "Nodes", "HangE", "MaxErr");
+    if args.solve {
+        println!("{:>5}  {:>8}  {:>8}  {:>8}  {:>12}  {:>12}",
+                 "Level", "Elems", "Nodes", "HangE", "L2 error", "Residual");
+    } else {
+        println!("{:>5}  {:>8}  {:>8}  {:>8}  {:>10}",
+                 "Level", "Elems", "Nodes", "HangE", "MaxErr");
+    }
     println!("{}", "-".repeat(52));
 
     for level in 0..=args.levels {
-        // Sanity check: current field should still match x+y+z exactly.
-        let err = max_linear_error(&mesh, &u);
         let hang = nc3.constraints().len();
-        println!("{:>5}  {:>8}  {:>8}  {:>8}  {:>10.3e}",
-                 level, mesh.n_elems(), mesh.n_nodes(), hang, err);
+        if args.solve {
+            let (u_solved, l2, res) = solve_level_poisson(&mesh, nc3.constraints());
+            u = u_solved;
+            println!("{:>5}  {:>8}  {:>8}  {:>8}  {:>12.4e}  {:>12.4e}",
+                     level, mesh.n_elems(), mesh.n_nodes(), hang, l2, res);
+        } else {
+            // Sanity check: current field should still match x+y+z exactly.
+            let err = max_linear_error(&mesh, &u);
+            println!("{:>5}  {:>8}  {:>8}  {:>8}  {:>10.3e}",
+                     level, mesh.n_elems(), mesh.n_nodes(), hang, err);
+        }
 
         if level == args.levels {
             break;
@@ -128,6 +149,7 @@ struct Args {
     n0: usize,
     levels: usize,
     fraction: f64,
+    solve: bool,
 }
 
 fn parse_args() -> Args {
@@ -135,6 +157,7 @@ fn parse_args() -> Args {
         n0: 1,
         levels: 3,
         fraction: 0.30,
+        solve: false,
     };
 
     let mut it = std::env::args().skip(1);
@@ -149,8 +172,110 @@ fn parse_args() -> Args {
             "--fraction" => {
                 a.fraction = it.next().unwrap_or("0.30".to_string()).parse().unwrap_or(0.30);
             }
+            "--solve" => {
+                a.solve = true;
+            }
             _ => {}
         }
     }
     a
+}
+
+fn solve_level_poisson(
+    mesh: &SimplexMesh<3>,
+    hanging_constraints: &[fem_mesh::HangingNodeConstraint],
+) -> (Vec<f64>, f64, f64) {
+    let space = H1Space::new(mesh.clone(), 1);
+
+    let u_exact = |x: &[f64]| -> f64 {
+        (PI * x[0]).sin() * (PI * x[1]).sin() * (PI * x[2]).sin()
+    };
+    let rhs_fn = |x: &[f64]| -> f64 {
+        3.0 * PI * PI * (PI * x[0]).sin() * (PI * x[1]).sin() * (PI * x[2]).sin()
+    };
+
+    let diffusion = DiffusionIntegrator { kappa: 1.0 };
+    let mut mat = Assembler::assemble_bilinear(&space, &[&diffusion], 3);
+    let source = DomainSourceIntegrator::new(rhs_fn);
+    let mut rhs = Assembler::assemble_linear(&space, &[&source], 3);
+
+    if !hanging_constraints.is_empty() {
+        apply_hanging_constraints(&mut mat, &mut rhs, hanging_constraints);
+    }
+
+    let dm = space.dof_manager();
+    let bnd = boundary_dofs(space.mesh(), dm, &[1, 2, 3, 4, 5, 6]);
+    let bnd_vals = vec![0.0_f64; bnd.len()];
+    apply_dirichlet(&mut mat, &mut rhs, &bnd, &bnd_vals);
+
+    let mut u = vec![0.0_f64; space.n_dofs()];
+    for c in hanging_constraints {
+        u[c.constrained] = 0.0;
+    }
+
+    let cfg = SolverConfig {
+        rtol: 1e-10,
+        atol: 1e-14,
+        max_iter: 20_000,
+        verbose: false,
+        ..SolverConfig::default()
+    };
+    let res = solve_pcg_jacobi(&mat, &rhs, &mut u, &cfg).expect("pcg solve failed");
+
+    if !hanging_constraints.is_empty() {
+        recover_hanging_values(&mut u, hanging_constraints);
+    }
+
+    let l2 = l2_error_tet_p1(&space, &u, u_exact);
+    (u, l2, res.final_residual)
+}
+
+fn l2_error_tet_p1<S: FESpace>(
+    space: &S,
+    uh: &[f64],
+    exact: impl Fn(&[f64]) -> f64,
+) -> f64 {
+    let mesh = space.mesh();
+    let mut err2 = 0.0_f64;
+    let re = TetP1;
+
+    for e in 0..mesh.n_elements() as u32 {
+        let quad = re.quadrature(5);
+        let nodes = mesh.element_nodes(e);
+        if nodes.len() != 4 {
+            continue;
+        }
+
+        let gd: Vec<usize> = space.element_dofs(e).iter().map(|&d| d as usize).collect();
+
+        let x0 = mesh.node_coords(nodes[0]);
+        let x1 = mesh.node_coords(nodes[1]);
+        let x2 = mesh.node_coords(nodes[2]);
+        let x3 = mesh.node_coords(nodes[3]);
+
+        let j11 = x1[0] - x0[0]; let j12 = x2[0] - x0[0]; let j13 = x3[0] - x0[0];
+        let j21 = x1[1] - x0[1]; let j22 = x2[1] - x0[1]; let j23 = x3[1] - x0[1];
+        let j31 = x1[2] - x0[2]; let j32 = x2[2] - x0[2]; let j33 = x3[2] - x0[2];
+        let det_j = (j11 * (j22 * j33 - j23 * j32)
+                   - j12 * (j21 * j33 - j23 * j31)
+                   + j13 * (j21 * j32 - j22 * j31)).abs();
+
+        let mut phi = vec![0.0_f64; re.n_dofs()];
+        for (qi, xi) in quad.points.iter().enumerate() {
+            re.eval_basis(xi, &mut phi);
+            let w = quad.weights[qi] * det_j;
+
+            let xp = [
+                x0[0] + j11 * xi[0] + j12 * xi[1] + j13 * xi[2],
+                x0[1] + j21 * xi[0] + j22 * xi[1] + j23 * xi[2],
+                x0[2] + j31 * xi[0] + j32 * xi[1] + j33 * xi[2],
+            ];
+
+            let uh_qp: f64 = phi.iter().zip(gd.iter()).map(|(&p, &di)| p * uh[di]).sum();
+            let diff = uh_qp - exact(&xp);
+            err2 += w * diff * diff;
+        }
+    }
+
+    err2.sqrt()
 }
