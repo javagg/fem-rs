@@ -3,7 +3,7 @@
 
 use nalgebra::DMatrix;
 
-use fem_element::lagrange::{TetP1, TriP1, TriP2};
+use fem_element::lagrange::{TetP1, TriP1, TriP2, TriP3};
 use fem_element::nedelec::{TetND1, TriND1};
 use fem_element::raviart_thomas::{TetRT0, TriRT0};
 use fem_element::reference::VectorReferenceElement;
@@ -19,6 +19,7 @@ fn ref_elem_vol(elem_type: ElementType, order: u8) -> Box<dyn ReferenceElement> 
     match (elem_type, order) {
         (ElementType::Tri3, 1) | (ElementType::Tri6, 1) => Box::new(TriP1),
         (ElementType::Tri3, 2) | (ElementType::Tri6, 2) => Box::new(TriP2),
+        (ElementType::Tri3, 3) | (ElementType::Tri6, 3) => Box::new(TriP3),
         (ElementType::Tet4, 1) => Box::new(TetP1),
         _ => panic!("ref_elem_vol: unsupported (element_type={elem_type:?}, order={order})"),
     }
@@ -200,6 +201,78 @@ pub fn compute_h1_error<S: FESpace>(
     }
 
     err2.sqrt()
+}
+
+// ─── Kelly error indicators ───────────────────────────────────────────────────
+
+/// Compute element-wise Kelly error indicators for a scalar H¹ solution.
+///
+/// The Kelly indicator for element `K` is:
+/// ```text
+///   η_K = sqrt( Σ_{E ∈ ∂K ∩ Ω_int} h_E * |[∇u_h · n_E]|² )
+/// ```
+/// where the sum is over interior edges, `h_E` is the edge length, and
+/// `[∇u_h · n_E]` is the normal gradient jump across the edge.
+///
+/// This is a simplified (facet-jump) variant without volume residuals.
+/// Suitable as a refinement indicator for AMR marking (Dörfler / maximum strategy).
+///
+/// # Arguments
+/// * `space`          — finite element space (H¹, scalar)
+/// * `dofs`           — FE solution coefficient vector
+/// * `interior_faces` — pre-computed interior face list (from [`InteriorFaceList::build`])
+///
+/// # Returns
+/// A `Vec<f64>` of length `n_elements` where `result[e]` is `η_e²`
+/// (take square root for the actual indicator).
+pub fn compute_kelly_indicators<S: FESpace>(
+    space: &S,
+    dofs: &[f64],
+    interior_faces: &crate::InteriorFaceList,
+) -> Vec<f64> {
+    let mesh = space.mesh();
+    let n_elems = mesh.n_elements();
+
+    // Pre-compute element-wise gradients (centroid evaluation).
+    let grads = compute_element_gradients(space, dofs);
+
+    let mut indicators = vec![0.0_f64; n_elems];
+
+    for face in &interior_faces.faces {
+        let na = face.face_nodes[0];
+        let nb = face.face_nodes[1];
+
+        let (h_e, nx, ny) = edge_length_and_normal_2d(mesh, na, nb);
+
+        let gl = &grads[face.elem_left as usize];
+        let gr = &grads[face.elem_right as usize];
+
+        // Normal gradient jump: [∇u_h · n]
+        let jump = (gl[0] - gr[0]) * nx + (gl[1] - gr[1]) * ny;
+        let contrib = h_e * jump * jump;
+
+        indicators[face.elem_left  as usize] += contrib;
+        indicators[face.elem_right as usize] += contrib;
+    }
+
+    indicators
+}
+
+/// Compute the 2-D edge length and outward unit normal for the edge `(na, nb)`.
+/// The normal is perpendicular to the edge direction, rotated 90° counterclockwise.
+fn edge_length_and_normal_2d<M: MeshTopology>(
+    mesh: &M,
+    na: u32,
+    nb: u32,
+) -> (f64, f64, f64) {
+    let xa = mesh.node_coords(na);
+    let xb = mesh.node_coords(nb);
+    let dx = xb[0] - xa[0];
+    let dy = xb[1] - xa[1];
+    let h = (dx * dx + dy * dy).sqrt();
+    // Unit normal: rotate edge vector 90° CCW, then normalise.
+    // (The sign convention doesn't matter for jump² magnitude.)
+    (h, -dy / h, dx / h)
 }
 
 // ─── Element-wise curl (H(curl) spaces) ────────────────────────────────────
@@ -630,5 +703,64 @@ mod tests {
             }
             prev = Some((err, h));
         }
+    }
+
+    // ── Kelly indicator tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn kelly_zero_for_linear_solution() {
+        // u = 3x - 2y: P1 reproduces this exactly → constant gradient per element
+        // → no gradient jump across any interior edge → all indicators = 0.
+        use crate::InteriorFaceList;
+        let mesh = SimplexMesh::<2>::unit_square_tri(4);
+        let space = H1Space::new(mesh, 1);
+        let v = space.interpolate(&|x| 3.0 * x[0] - 2.0 * x[1]);
+        let dofs = v.as_slice();
+
+        let ifl = InteriorFaceList::build(space.mesh());
+        let indicators = compute_kelly_indicators(&space, dofs, &ifl);
+
+        assert_eq!(indicators.len(), space.mesh().n_elements());
+        for (e, &ind) in indicators.iter().enumerate() {
+            assert!(
+                ind.abs() < 1e-20,
+                "elem {e}: Kelly indicator should be 0 for linear u, got {ind:.3e}"
+            );
+        }
+    }
+
+    #[test]
+    fn kelly_nonzero_for_nonlinear_solution() {
+        // For a Poisson solution on a coarse mesh, gradient jumps between adjacent
+        // elements are non-zero → total indicators > 0.
+        use crate::{Assembler, InteriorFaceList, standard::{DiffusionIntegrator, DomainSourceIntegrator}};
+        use fem_space::constraints::{apply_dirichlet, boundary_dofs};
+        use std::f64::consts::PI;
+
+        let mesh = SimplexMesh::<2>::unit_square_tri(4);
+        let space = H1Space::new(mesh.clone(), 1);
+        let ndofs = space.n_dofs();
+
+        let mut mat = Assembler::assemble_bilinear(&space, &[&DiffusionIntegrator { kappa: 1.0 }], 3);
+        let src = DomainSourceIntegrator::new(|x: &[f64]| {
+            2.0 * PI * PI * (PI * x[0]).sin() * (PI * x[1]).sin()
+        });
+        let mut rhs = Assembler::assemble_linear(&space, &[&src], 3);
+        let dm = space.dof_manager();
+        let bnd = boundary_dofs(&mesh, dm, &[1, 2, 3, 4]);
+        apply_dirichlet(&mut mat, &mut rhs, &bnd, &vec![0.0; bnd.len()]);
+
+        let mut u = vec![0.0_f64; ndofs];
+        fem_solver::solve_pcg_jacobi(&mat, &rhs, &mut u, &fem_solver::SolverConfig {
+            rtol: 1e-12, max_iter: 10_000, verbose: false,
+            ..fem_solver::SolverConfig::default()
+        }).unwrap();
+
+        let ifl = InteriorFaceList::build(space.mesh());
+        let indicators = compute_kelly_indicators(&space, &u, &ifl);
+
+        assert_eq!(indicators.len(), space.mesh().n_elements());
+        let total: f64 = indicators.iter().sum();
+        assert!(total > 0.0, "total Kelly indicator should be > 0, got {total}");
     }
 }

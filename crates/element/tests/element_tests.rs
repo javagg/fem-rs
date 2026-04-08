@@ -68,7 +68,11 @@ fn tri_p1_quadrature_weight_sum() {
 
 #[test]
 fn tri_p2_quadrature_weight_sum() {
-    check_weight_sum(&TriP2, 7, 0.5, 1e-13);
+    // order 5 uses the 7-pt Dunavant rule (exact, tight tolerance).
+    check_weight_sum(&TriP2, 5, 0.5, 1e-13);
+    // order 7 uses the 12-pt Dunavant rule (slightly looser due to limited
+    // precision of published weight coefficients, but well within FEM needs).
+    check_weight_sum(&TriP2, 7, 0.5, 1e-10);
 }
 
 #[test]

@@ -20,7 +20,7 @@ use fem_assembly::{
     Assembler,
     standard::{DiffusionIntegrator, DomainSourceIntegrator},
 };
-use fem_element::{ReferenceElement, lagrange::{TriP1, TriP2}};
+use fem_element::{ReferenceElement, lagrange::{TriP1, TriP2, TriP3}};
 use fem_mesh::{topology::MeshTopology, SimplexMesh};
 use fem_space::{
     H1Space,
@@ -43,7 +43,7 @@ fn l2_error<M: MeshTopology>(
     ref_elem:  &dyn ReferenceElement,
 ) -> f64 {
     let mesh = space.mesh();
-    let quad = ref_elem.quadrature(5);
+    let quad = ref_elem.quadrature(2 * ref_elem.order() as u8 + 2);
     let n_ldofs = ref_elem.n_dofs();
 
     let mut phi     = vec![0.0_f64; n_ldofs];
@@ -126,6 +126,7 @@ fn solve_poisson<M: MeshTopology + Clone>(
     let ref_elem: Box<dyn ReferenceElement> = match order {
         1 => Box::new(TriP1),
         2 => Box::new(TriP2),
+        3 => Box::new(TriP3),
         _ => panic!("unsupported order"),
     };
     l2_error(&uh, &space, ref_elem.as_ref())
@@ -167,6 +168,42 @@ fn poisson_p2_convergence_rate() {
     let rate = (err8 / err16).log2();
     println!("P2 convergence rate = {rate:.2}");
     assert!(rate > 2.8, "P2 convergence rate {rate:.2} < 2.8");
+}
+
+/// Debug: show P3 errors at multiple refinements.
+#[test]
+fn poisson_p3_debug_rates() {
+    for n in [2usize, 4, 8, 16] {
+        let err = solve_poisson(SimplexMesh::<2>::unit_square_tri(n), 3);
+        println!("P3 n={n}: error = {err:.6e}");
+    }
+    let errs: Vec<f64> = [2usize, 4, 8, 16].iter()
+        .map(|&n| solve_poisson(SimplexMesh::<2>::unit_square_tri(n), 3))
+        .collect();
+    for i in 0..errs.len()-1 {
+        let ns = [2usize, 4, 8, 16];
+        println!("Rate {}→{}: {:.3}", ns[i], ns[i+1], (errs[i]/errs[i+1]).log2());
+    }
+}
+
+/// Verify P3 L2 error < 8e-4 on a 16×16 mesh (theoretical: O(h⁴)).
+#[test]
+fn poisson_p3_16x16_l2_error() {
+    let mesh = SimplexMesh::<2>::unit_square_tri(16);
+    let err  = solve_poisson(mesh, 3);
+    println!("P3 16×16 L2 error = {err:.3e}");
+    assert!(err < 8e-4, "P3 L2 error too large: {err:.3e} >= 8e-4");
+}
+
+/// Verify P3 convergence rate ≥ 3.5 (theoretical: 4).
+/// Uses n=8→16 to avoid pre-asymptotic regime at small mesh sizes.
+#[test]
+fn poisson_p3_convergence_rate() {
+    let err8  = solve_poisson(SimplexMesh::<2>::unit_square_tri(8),  3);
+    let err16 = solve_poisson(SimplexMesh::<2>::unit_square_tri(16), 3);
+    let rate = (err8 / err16).log2();
+    println!("P3 convergence rate = {rate:.2}");
+    assert!(rate > 3.5, "P3 convergence rate {rate:.2} < 3.5");
 }
 
 // ─── Quad4 Poisson tests ────────────────────────────────────────────────────
