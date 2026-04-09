@@ -42,15 +42,17 @@ pub struct H1TraceSpace<M: MeshTopology> {
 }
 
 impl<M: MeshTopology> H1TraceSpace<M> {
-    /// Build an H¹ trace space of order 1 or 2 on the boundary faces of `mesh`.
+    /// Build an H¹ trace space of order 1, 2, or 3 on the boundary faces of `mesh`.
     ///
     /// - P1 trace (`order = 1`): one DOF per boundary vertex.
     /// - P2 trace (`order = 2`): one DOF per boundary vertex + one per boundary edge midpoint.
+    /// - P3 trace (`order = 3`): one DOF per boundary vertex + two per boundary edge interior
+    ///   (at ⅓ and ⅔) + one per boundary triangle interior (3D only).
     ///
     /// # Panics
-    /// Panics if `order > 2` (P3 trace not yet implemented).
+    /// Panics if `order > 3`.
     pub fn new(mesh: M, order: u8) -> Self {
-        assert!(order <= 2, "H1TraceSpace: only order 1 and 2 supported, got {order}");
+        assert!(order <= 3, "H1TraceSpace: only orders 1–3 supported, got {order}");
         let dim = mesh.dim() as usize;
         let n_bfaces = mesh.n_boundary_faces();
 
@@ -74,13 +76,9 @@ impl<M: MeshTopology> H1TraceSpace<M> {
             next_dof += 1;
         }
 
-        // For P2: also assign DOFs for boundary edge midpoints.
-        // Map EdgeKey → trace DOF for edge midpoints.
+        // For P2: assign DOFs for boundary edge midpoints.
         let mut edge_to_dof: std::collections::HashMap<EdgeKey, DofId> = std::collections::HashMap::new();
         if order == 2 {
-            // Collect all unique edges from boundary faces.
-            // In 2D: each face is an edge (2 nodes) → 1 edge.
-            // In 3D: each face is a triangle (3 nodes) → 3 edges.
             for f in 0..n_bfaces as u32 {
                 let nodes = mesh.face_nodes(f);
                 let edges: Vec<(u32, u32)> = if nodes.len() == 2 {
@@ -93,14 +91,57 @@ impl<M: MeshTopology> H1TraceSpace<M> {
                     edge_to_dof.entry(key).or_insert_with(|| {
                         let d = next_dof;
                         next_dof += 1;
-                        // Midpoint coordinates
                         let ca = mesh.node_coords(key.0);
                         let cb = mesh.node_coords(key.1);
-                        for d in 0..dim {
-                            dof_coords.push(0.5 * (ca[d] + cb[d]));
-                        }
+                        for di in 0..dim { dof_coords.push(0.5 * (ca[di] + cb[di])); }
                         d
                     });
+                }
+            }
+        }
+
+        // For P3: assign two DOFs per boundary edge (at 1/3 and 2/3),
+        // and one DOF per boundary triangle face (face centroid, 3D only).
+        let mut edge_to_dof2: std::collections::HashMap<EdgeKey, [DofId; 2]> =
+            std::collections::HashMap::new();
+        let mut face_bubble_dof: Vec<DofId> = Vec::new(); // indexed by boundary face index
+        if order == 3 {
+            // Edge DOFs (two per edge, at t=1/3 and t=2/3 from the smaller-index vertex)
+            for f in 0..n_bfaces as u32 {
+                let nodes = mesh.face_nodes(f);
+                let edges: Vec<(u32, u32)> = if nodes.len() == 2 {
+                    vec![(nodes[0], nodes[1])]
+                } else {
+                    vec![(nodes[0], nodes[1]), (nodes[1], nodes[2]), (nodes[0], nodes[2])]
+                };
+                for (a, b) in edges {
+                    let key = EdgeKey::new(a, b);
+                    edge_to_dof2.entry(key).or_insert_with(|| {
+                        let d0 = next_dof; next_dof += 1;
+                        let d1 = next_dof; next_dof += 1;
+                        // At 1/3 and 2/3 from key.0 to key.1
+                        let ca = mesh.node_coords(key.0);
+                        let cb = mesh.node_coords(key.1);
+                        for di in 0..dim { dof_coords.push(ca[di]/3.0*2.0 + cb[di]/3.0); }
+                        for di in 0..dim { dof_coords.push(ca[di]/3.0 + cb[di]/3.0*2.0); }
+                        [d0, d1]
+                    });
+                }
+            }
+            // Face bubble DOFs (3D only: one per boundary triangle face at centroid)
+            for f in 0..n_bfaces as u32 {
+                let nodes = mesh.face_nodes(f);
+                if nodes.len() >= 3 {
+                    // Face centroid
+                    let d = next_dof; next_dof += 1;
+                    face_bubble_dof.push(d);
+                    for di in 0..dim {
+                        let avg = nodes.iter().map(|&n| mesh.node_coords(n)[di]).sum::<f64>()
+                            / nodes.len() as f64;
+                        dof_coords.push(avg);
+                    }
+                } else {
+                    face_bubble_dof.push(u32::MAX); // no bubble for edge faces (2D)
                 }
             }
         }
@@ -109,15 +150,16 @@ impl<M: MeshTopology> H1TraceSpace<M> {
 
         // Build per-face DOF connectivity.
         // P1 in 2D: 2 DOFs/face; P1 in 3D: 3 DOFs/face.
-        // P2 in 2D: 3 DOFs/face (2 verts + 1 edge midpoint).
-        // P2 in 3D: 6 DOFs/face (3 verts + 3 edge midpoints).
-        let dofs_per_face = if order == 1 {
-            mesh.face_nodes(0).len()
-        } else {
-            // P2: vertices + edge midpoints per face
-            let n_verts_per_face = mesh.face_nodes(0).len();
-            let n_edges_per_face = if n_verts_per_face == 2 { 1 } else { 3 };
-            n_verts_per_face + n_edges_per_face
+        // P2 in 2D: 3 DOFs/face; P2 in 3D: 6 DOFs/face.
+        // P3 in 2D: 4 DOFs/face (2 verts + 2 edge); P3 in 3D: 10 DOFs/face.
+        let n_verts_per_face = if n_bfaces > 0 { mesh.face_nodes(0).len() } else { 2 };
+        let dofs_per_face = match (order, n_verts_per_face) {
+            (1, v) => v,
+            (2, 2) => 3,   // 2 verts + 1 edge midpoint
+            (2, _) => 6,   // 3 verts + 3 edge midpoints
+            (3, 2) => 4,   // 2 verts + 2 edge DOFs
+            (3, _) => 10,  // 3 verts + 3*2 edge DOFs + 1 face bubble
+            _      => n_verts_per_face,
         };
 
         let mut face_dofs = Vec::with_capacity(n_bfaces * dofs_per_face);
@@ -127,7 +169,7 @@ impl<M: MeshTopology> H1TraceSpace<M> {
             for &n in nodes {
                 face_dofs.push(node_to_dof[n as usize]);
             }
-            // Edge midpoint DOFs (P2 only).
+            // Edge midpoint DOFs (P2).
             if order == 2 {
                 let edges: Vec<(u32, u32)> = if nodes.len() == 2 {
                     vec![(nodes[0], nodes[1])]
@@ -137,6 +179,29 @@ impl<M: MeshTopology> H1TraceSpace<M> {
                 for (a, b) in edges {
                     let key = EdgeKey::new(a, b);
                     face_dofs.push(*edge_to_dof.get(&key).expect("edge midpoint DOF not found"));
+                }
+            }
+            // Edge interior DOFs (P3: 2 per edge).
+            if order == 3 {
+                let edges: Vec<(u32, u32)> = if nodes.len() == 2 {
+                    vec![(nodes[0], nodes[1])]
+                } else {
+                    vec![(nodes[0], nodes[1]), (nodes[1], nodes[2]), (nodes[0], nodes[2])]
+                };
+                for (a, b) in edges {
+                    let key = EdgeKey::new(a, b);
+                    let [d0, d1] = *edge_to_dof2.get(&key).expect("P3 edge DOF not found");
+                    // Order: d0 is closer to key.0, d1 to key.1.
+                    // If edge is (a,b) and key = sorted(a,b), canonical order matches key.0→key.1.
+                    // For the face, the edge is (a,b); key is sorted.
+                    // DOFs near key.0 first, then key.1.
+                    face_dofs.push(d0);
+                    face_dofs.push(d1);
+                }
+                // Face bubble (3D only)
+                if nodes.len() >= 3 && !face_bubble_dof.is_empty() {
+                    let bd = face_bubble_dof[f as usize];
+                    if bd != u32::MAX { face_dofs.push(bd); }
                 }
             }
         }
@@ -281,6 +346,28 @@ mod tests {
         for f in 0..space.n_boundary_faces() as u32 {
             let dofs = space.face_dofs(f);
             assert_eq!(dofs.len(), 3, "3-D boundary face should have 3 DOFs (Tri3 P1)");
+        }
+    }
+
+    #[test]
+    fn h1_trace_p3_2d_dof_count() {
+        // For n=4 unit square tri mesh:
+        // P3 trace: 16 boundary vertices + 16 boundary edges × 2 = 48 total
+        let mesh = SimplexMesh::<2>::unit_square_tri(4);
+        let space = H1TraceSpace::new(mesh, 3);
+        assert_eq!(space.n_dofs(), 16 + 16 * 2, "P3 trace 2D: 16 verts + 32 edge DOFs");
+    }
+
+    #[test]
+    fn h1_trace_p3_2d_face_dofs() {
+        let mesh = SimplexMesh::<2>::unit_square_tri(3);
+        let space = H1TraceSpace::new(mesh, 3);
+        for f in 0..space.n_boundary_faces() as u32 {
+            let dofs = space.face_dofs(f);
+            assert_eq!(dofs.len(), 4, "2-D P3 face should have 4 DOFs (2 verts + 2 edge)");
+            for &d in dofs {
+                assert!((d as usize) < space.n_dofs(), "P3 DOF out of range");
+            }
         }
     }
 }

@@ -3,7 +3,7 @@
 
 use nalgebra::DMatrix;
 
-use fem_element::lagrange::{TetP1, TetP2, TriP1, TriP2, TriP3};
+use fem_element::lagrange::{TetP1, TetP2, TetP3, TriP1, TriP2, TriP3};
 use fem_element::nedelec::{TetND1, TriND1};
 use fem_element::raviart_thomas::{TetRT0, TriRT0};
 use fem_element::reference::VectorReferenceElement;
@@ -22,6 +22,7 @@ fn ref_elem_vol(elem_type: ElementType, order: u8) -> Box<dyn ReferenceElement> 
         (ElementType::Tri3, 3) | (ElementType::Tri6, 3) => Box::new(TriP3),
         (ElementType::Tet4, 1) => Box::new(TetP1),
         (ElementType::Tet4, 2) => Box::new(TetP2),
+        (ElementType::Tet4, 3) => Box::new(TetP3),
         _ => panic!("ref_elem_vol: unsupported (element_type={elem_type:?}, order={order})"),
     }
 }

@@ -250,6 +250,12 @@ pub fn tri_rule(order: u8) -> QuadratureRule {
 /// Quadrature rule on the reference tetrahedron `(0,0,0),(1,0,0),(0,1,0),(0,0,1)`.
 ///
 /// Weights sum to 1/6 (volume of reference tet).
+///
+/// Supported polynomial degrees:
+/// - order ≤ 1: 1-point centroid
+/// - order ≤ 2: 4-point rule (exact degree 2)
+/// - order ≤ 5: 10-point Grundmann-Moller rule, s=2 (exact degree 5)
+/// - order > 5: 20-point Grundmann-Moller rule, s=3 (exact degree 7)
 pub fn tet_rule(order: u8) -> QuadratureRule {
     if order <= 1 {
         // 1-point centroid (exact degree 1)
@@ -257,7 +263,7 @@ pub fn tet_rule(order: u8) -> QuadratureRule {
             points:  vec![vec![0.25, 0.25, 0.25]],
             weights: vec![1.0 / 6.0],
         }
-    } else {
+    } else if order <= 2 {
         // 4-point rule (exact for degree 2)
         let a = 0.138_196_601_125_010_5;
         let b = 0.585_410_196_624_968_5;
@@ -270,8 +276,105 @@ pub fn tet_rule(order: u8) -> QuadratureRule {
             ],
             weights: vec![1.0 / 24.0; 4],
         }
+    } else if order <= 5 {
+        // 10-point Grundmann-Moller rule, s=2 (exact degree 5)
+        grundmann_moller_tet(2)
+    } else {
+        // 20-point Grundmann-Moller rule, s=3 (exact degree 7)
+        grundmann_moller_tet(3)
     }
 }
+
+/// Grundmann-Moller quadrature rule on the reference tetrahedron.
+/// Index `s` gives a rule exact for degree `2s+1`.
+///
+/// Points are the standard GM lattice on the unit tetrahedron.
+/// Weights are solved exactly so that all monomials of degree ≤ 2s+1
+/// are integrated exactly over T³ = {(x,y,z): x,y,z≥0, x+y+z≤1}.
+/// Weights at each level i are equal across all points at that level
+/// (by the symmetry of the rule) and are obtained by solving the
+/// (s+1)×(s+1) Vandermonde-like system with exact simplex integrals.
+fn grundmann_moller_tet(s: u32) -> QuadratureRule {
+    let d: u32 = 3;
+
+    // Generate point sets for each level i = 0..=s.
+    let levels: Vec<Vec<[f64; 3]>> = (0..=s).map(|i| {
+        let si = s - i;
+        let m = (2 * si + d + 1) as f64;
+        simplex_points(si, d + 1).iter().map(|coords| {
+            let bary: Vec<f64> = coords.iter().map(|&j| (2.0 * j as f64 + 1.0) / m).collect();
+            [bary[1], bary[2], bary[3]]
+        }).collect()
+    }).collect();
+
+    // For each level i, all points share the same weight w_i.
+    // Compute sum of x₁^{2k} over all points at level i.
+    let n = (s + 1) as usize;
+    let level_sums: Vec<Vec<f64>> = (0..n).map(|i| {
+        (0..n).map(|k| {
+            levels[i].iter().map(|p| p[0].powi((2 * k) as i32)).sum::<f64>()
+        }).collect()
+    }).collect();
+
+    // Exact integrals of x^{2k} over T³: (2k)! / (2k+3)!
+    let exact: Vec<f64> = (0..n).map(|k| {
+        fact_f64((2 * k) as u32) / fact_f64((2 * k + 3) as u32)
+    }).collect();
+
+    // Solve the (s+1)×(s+1) linear system for per-level weights.
+    let mut mat: Vec<Vec<f64>> = (0..n).map(|k| {
+        let mut row: Vec<f64> = (0..n).map(|i| level_sums[i][k]).collect();
+        row.push(exact[k]);
+        row
+    }).collect();
+    for col in 0..n {
+        let piv = (col..n).max_by(|&a, &b|
+            mat[a][col].abs().partial_cmp(&mat[b][col].abs()).unwrap()
+        ).unwrap();
+        mat.swap(col, piv);
+        let scale = mat[col][col];
+        for j in col..=n { mat[col][j] /= scale; }
+        for row in 0..n {
+            if row != col {
+                let f = mat[row][col];
+                for j in col..=n { mat[row][j] -= f * mat[col][j]; }
+            }
+        }
+    }
+    let ws_per_level: Vec<f64> = (0..n).map(|i| mat[i][n]).collect();
+
+    // Assemble the rule.
+    let mut pts: Vec<Vec<f64>> = Vec::new();
+    let mut wts: Vec<f64> = Vec::new();
+    for (i, level) in levels.iter().enumerate() {
+        for pt in level {
+            pts.push(vec![pt[0], pt[1], pt[2]]);
+            wts.push(ws_per_level[i]);
+        }
+    }
+    QuadratureRule { points: pts, weights: wts }
+}
+
+/// All non-negative integer vectors (j_0,...,j_{n-1}) with sum = s.
+fn simplex_points(s: u32, n: u32) -> Vec<Vec<u32>> {
+    if n == 1 {
+        return vec![vec![s]];
+    }
+    let mut result = Vec::new();
+    for j0 in 0..=s {
+        for rest in simplex_points(s - j0, n - 1) {
+            let mut v = vec![j0];
+            v.extend(rest);
+            result.push(v);
+        }
+    }
+    result
+}
+
+fn fact_f64(n: u32) -> f64 {
+    (1..=n as u64).map(|x| x as f64).product::<f64>().max(1.0)
+}
+
 
 // ─── Quadrilateral [-1,1]² ────────────────────────────────────────────────────
 
@@ -451,5 +554,32 @@ mod tests {
             .map(|(x, w)| w * x.powi(5))
             .sum();
         assert!(val.abs() < 1e-14, "integral of x⁵ = {val}");
+    }
+}
+
+#[cfg(test)]
+mod tet_quad_tests {
+    use super::*;
+    use crate::reference::ReferenceElement;
+    #[test]
+    fn tet_rule_weight_sums() {
+        for order in [1u8, 2, 3, 5, 6, 7] {
+            let rule = tet_rule(order);
+            let wsum: f64 = rule.weights.iter().sum();
+            assert!((wsum - 1.0/6.0).abs() < 1e-12,
+                "tet_rule(order={order}): weight sum = {wsum:.12} (expected {})", 1.0/6.0);
+        }
+    }
+    #[test]
+    fn tet_rule_pou_p3() {
+        // Verify sum of TetP3 basis functions = 1 at quadrature points
+        use crate::lagrange::TetP3;
+        let rule = tet_rule(7);
+        let mut phi = vec![0.0f64; 20];
+        for pt in &rule.points {
+            TetP3.eval_basis(pt, &mut phi);
+            let s: f64 = phi.iter().sum();
+            assert!((s - 1.0).abs() < 1e-12, "POU failed at {pt:?}: sum={s}");
+        }
     }
 }

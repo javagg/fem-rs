@@ -7,7 +7,7 @@
 use nalgebra::DMatrix;
 
 use fem_core::types::DofId;
-use fem_element::{ReferenceElement, lagrange::{SegP1, SegP2, TetP1, TetP2, TriP1, TriP2, TriP3, QuadQ1, HexQ1}};
+use fem_element::{ReferenceElement, lagrange::{SegP1, SegP2, SegP3, TetP1, TetP2, TetP3, TriP1, TriP2, TriP3, QuadQ1, QuadQ2, HexQ1}};
 use fem_linalg::{CooMatrix, CsrMatrix};
 use fem_mesh::{element_type::ElementType, topology::MeshTopology};
 use fem_space::fe_space::FESpace;
@@ -24,11 +24,13 @@ fn ref_elem_vol(elem_type: ElementType, order: u8) -> Box<dyn ReferenceElement> 
         (ElementType::Tri3, 3) | (ElementType::Tri6, 3) => Box::new(TriP3),
         (ElementType::Tet4, 1)                           => Box::new(TetP1),
         (ElementType::Tet4, 2)                           => Box::new(TetP2),
+        (ElementType::Tet4, 3)                           => Box::new(TetP3),
         (ElementType::Quad4, 1)                          => Box::new(QuadQ1),
+        (ElementType::Quad4, 2)                          => Box::new(QuadQ2),
         (ElementType::Hex8, 1)                           => Box::new(HexQ1),
         _ => panic!(
             "ref_elem_vol: unsupported combination (element_type={elem_type:?}, order={order}). \
-             Supported: Tri3/Tri6 P1/P2, Tet4 P1, Quad4 Q1, Hex8 Q1"
+             Supported: Tri3/Tri6 P1/P2/P3, Tet4 P1/P2/P3, Quad4 Q1/Q2, Hex8 Q1"
         ),
     }
 }
@@ -37,7 +39,8 @@ fn ref_elem_vol(elem_type: ElementType, order: u8) -> Box<dyn ReferenceElement> 
 fn ref_elem_face(face_elem_type: ElementType, order: u8) -> Box<dyn ReferenceElement> {
     match (face_elem_type, order) {
         (ElementType::Line2, 1) => Box::new(SegP1),
-        (ElementType::Line2, 2) | (ElementType::Line2, 3) => Box::new(SegP2),
+        (ElementType::Line2, 2) => Box::new(SegP2),
+        (ElementType::Line2, 3) => Box::new(SegP3),
         (ElementType::Tri3,  1) => Box::new(TriP1),
         _ => panic!("ref_elem_face: unsupported (element_type={face_elem_type:?}, order={order})"),
     }

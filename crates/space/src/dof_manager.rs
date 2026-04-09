@@ -90,7 +90,7 @@ impl DofManager {
     /// Currently supports:
     /// - Any mesh with `order = 1` (vertex DOFs), including mixed-element meshes.
     /// - 2-D triangular meshes (`Tri3`) with `order = 2` or `order = 3`.
-    /// - 3-D tetrahedral meshes (`Tet4`) with `order = 2`.
+    /// - 3-D tetrahedral meshes (`Tet4`) with `order = 2` or `order = 3`.
     ///
     /// # Panics
     /// Panics if `order > 3` or if `order = 2,3` is requested on an unsupported mesh type.
@@ -100,6 +100,12 @@ impl DofManager {
             2 => {
                 if mesh.dim() == 3 {
                     Self::build_p2_tet(mesh)
+                } else if mesh.n_elements() > 0
+                    && mesh.element_nodes(0).len() == 4
+                    && mesh.dim() == 2
+                {
+                    // Quad4 mesh: use Q2 (9-node biquadratic) DOF manager.
+                    Self::build_q2_quad(mesh)
                 } else {
                     Self::build_p2(mesh)
                 }
@@ -243,13 +249,112 @@ impl DofManager {
         }
     }
 
-    // ─── P3 ──────────────────────────────────────────────────────────────────
+    // ─── Q2 (biquadratic quad) ────────────────────────────────────────────────
+
+    /// Build Q2 DOFs for a 2-D Quad4 mesh (9 DOFs per element):
+    /// - Positions 0–3: vertex DOFs (same as node IDs)
+    /// - Positions 4–7: edge midpoint DOFs (one per edge, shared between adjacent quads)
+    ///   order: edge(n0,n1), edge(n1,n2), edge(n2,n3), edge(n3,n0)
+    /// - Position 8: interior DOF (one per element, not shared)
+    ///
+    /// DOF ordering matches [`fem_element::QuadQ2`].
+    fn build_q2_quad<M: MeshTopology>(mesh: &M) -> Self {
+        let n_nodes = mesh.n_nodes();
+        let n_elems = mesh.n_elements();
+        let dim     = mesh.dim() as usize;
+        assert_eq!(dim, 2, "build_q2_quad requires a 2-D mesh");
+
+        let mut edge_map: HashMap<EdgeKey, DofId> = HashMap::new();
+        let mut next_dof = n_nodes as DofId;
+
+        // dofs_per_elem = 9: 4 corners + 4 edges + 1 interior.
+        let dofs_per_elem = 9;
+        let mut dofs_flat = vec![0u32; n_elems * dofs_per_elem];
+
+        for e in 0..n_elems as u32 {
+            let ns = mesh.element_nodes(e);
+            assert_eq!(ns.len(), 4, "build_q2_quad requires Quad4 elements");
+            let (n0, n1, n2, n3) = (ns[0], ns[1], ns[2], ns[3]);
+            let base = e as usize * dofs_per_elem;
+
+            // Vertex DOFs (positions 0–3)
+            dofs_flat[base]     = n0;
+            dofs_flat[base + 1] = n1;
+            dofs_flat[base + 2] = n2;
+            dofs_flat[base + 3] = n3;
+
+            // Edge midpoint DOFs (positions 4–7)
+            // Ordering: bottom (n0,n1), right (n1,n2), top (n2,n3), left (n3,n0)
+            let edges = [(n0, n1), (n1, n2), (n2, n3), (n3, n0)];
+            for (k, &(a, b)) in edges.iter().enumerate() {
+                let key = EdgeKey::new(a, b);
+                let dof = *edge_map.entry(key).or_insert_with(|| {
+                    let d = next_dof; next_dof += 1; d
+                });
+                dofs_flat[base + 4 + k] = dof;
+            }
+
+            // Interior DOF (position 8) — one per element, unique.
+            dofs_flat[base + 8] = next_dof;
+            next_dof += 1;
+        }
+
+        let n_dofs = next_dof as usize;
+
+        // Build DOF coordinates.
+        let mut dof_coords = vec![0.0_f64; n_dofs * dim];
+
+        // Vertex coords.
+        for n in 0..n_nodes as u32 {
+            let c = mesh.node_coords(n);
+            dof_coords[n as usize * dim .. n as usize * dim + dim].copy_from_slice(c);
+        }
+
+        // Edge midpoints.
+        for (&EdgeKey(a, b), &dof_id) in &edge_map {
+            let ca = mesh.node_coords(a);
+            let cb = mesh.node_coords(b);
+            let base = dof_id as usize * dim;
+            for d in 0..dim { dof_coords[base + d] = 0.5 * (ca[d] + cb[d]); }
+        }
+
+        // Interior DOFs: element centroids.
+        for e in 0..n_elems as u32 {
+            let base = e as usize * dofs_per_elem;
+            let interior_dof = dofs_flat[base + 8] as usize;
+            let ns = mesh.element_nodes(e);
+            let centroid_base = interior_dof * dim;
+            for d in 0..dim {
+                dof_coords[centroid_base + d] = ns.iter()
+                    .map(|&n| mesh.node_coords(n)[d])
+                    .sum::<f64>() / ns.len() as f64;
+            }
+        }
+
+        let n_edge_dofs = edge_map.len();
+        DofManager {
+            order: 2, n_dofs, dofs_flat, dofs_per_elem,
+            elem_dof_offsets: None, dof_coords, dim,
+            n_vertex_dofs: n_nodes, edge_dof_map: edge_map,
+            edge_dof2_map: HashMap::new(),
+            bubble_dof_start: n_nodes + n_edge_dofs,
+        }
+    }
 
     fn build_p3<M: MeshTopology>(mesh: &M) -> Self {
+        let dim = mesh.dim() as usize;
+        match dim {
+            2 => Self::build_p3_tri(mesh),
+            3 => Self::build_p3_tet(mesh),
+            _ => panic!("P3 DofManager only supports 2-D and 3-D meshes, got dim={dim}"),
+        }
+    }
+
+    fn build_p3_tri<M: MeshTopology>(mesh: &M) -> Self {
         let n_nodes  = mesh.n_nodes();
         let n_elems  = mesh.n_elements();
         let dim      = mesh.dim() as usize;
-        assert_eq!(dim, 2, "P3 DofManager currently only supports 2-D meshes");
+        assert_eq!(dim, 2, "build_p3_tri requires a 2-D mesh");
 
         // DOF layout per element (10):
         //   0,1,2   → vertex DOFs (same as node IDs)
@@ -353,6 +458,158 @@ impl DofManager {
             for d in 0..dim {
                 let cx: f64 = ns.iter().take(3).map(|&n| mesh.node_coords(n)[d]).sum::<f64>() / 3.0;
                 dof_coords[bubble_dof + d] = cx;
+            }
+        }
+
+        DofManager {
+            order: 3, n_dofs, dofs_flat, dofs_per_elem,
+            elem_dof_offsets: None, dof_coords, dim,
+            n_vertex_dofs: n_nodes,
+            edge_dof_map: HashMap::new(),
+            edge_dof2_map: edge2_map,
+            bubble_dof_start,
+        }
+    }
+
+    // ─── P3 (3-D Tet) ─────────────────────────────────────────────────────────
+
+    /// Build a P3 DOF manager for a 3-D tetrahedral mesh.
+    ///
+    /// 20 DOFs per tet:
+    /// - 4 vertex DOFs
+    /// - 12 edge DOFs (2 per edge × 6 edges)
+    /// - 4 face DOFs (1 per face × 4 faces)
+    ///
+    /// DOF ordering per element matches [`fem_element::TetP3`].
+    fn build_p3_tet<M: MeshTopology>(mesh: &M) -> Self {
+        let n_nodes = mesh.n_nodes();
+        let n_elems = mesh.n_elements();
+        let dim     = mesh.dim() as usize;
+        assert_eq!(dim, 3, "build_p3_tet requires a 3-D mesh");
+
+        // DOF layout per element (20):
+        //   0-3    → vertex DOFs (node IDs)
+        //   4,5    → edge(v0→v1): near v0, near v1
+        //   6,7    → edge(v0→v2): near v0, near v2
+        //   8,9    → edge(v0→v3): near v0, near v3
+        //   10,11  → edge(v1→v2): near v1, near v2
+        //   12,13  → edge(v1→v3): near v1, near v3
+        //   14,15  → edge(v2→v3): near v2, near v3
+        //   16     → face(v0,v1,v2)
+        //   17     → face(v0,v1,v3)
+        //   18     → face(v0,v2,v3)
+        //   19     → face(v1,v2,v3)
+        let dofs_per_elem = 20;
+
+        // ── Pass 1: enumerate edges (2 DOFs each) ───────────────────────────
+        fn get_edge_dofs(a: NodeId, b: NodeId, next: &mut DofId, map: &mut HashMap<EdgeKey, [DofId; 2]>) -> [DofId; 2] {
+            let key = EdgeKey::new(a, b);
+            let pair = *map.entry(key).or_insert_with(|| {
+                let d0 = *next; *next += 1;
+                let d1 = *next; *next += 1;
+                [d0, d1]
+            });
+            if a == key.0 { [pair[0], pair[1]] } else { [pair[1], pair[0]] }
+        }
+
+        let mut edge2_map: HashMap<EdgeKey, [DofId; 2]> = HashMap::new();
+        let mut next_dof  = n_nodes as DofId;
+        let mut dofs_flat = vec![0u32; n_elems * dofs_per_elem];
+
+        for e in 0..n_elems as u32 {
+            let ns  = mesh.element_nodes(e);
+            assert!(ns.len() >= 4, "TetP3 requires 4-node tetrahedra");
+            let (n0, n1, n2, n3) = (ns[0], ns[1], ns[2], ns[3]);
+            let base = e as usize * dofs_per_elem;
+
+            dofs_flat[base]     = n0;
+            dofs_flat[base + 1] = n1;
+            dofs_flat[base + 2] = n2;
+            dofs_flat[base + 3] = n3;
+
+            let [d4,  d5]  = get_edge_dofs(n0, n1, &mut next_dof, &mut edge2_map);
+            let [d6,  d7]  = get_edge_dofs(n0, n2, &mut next_dof, &mut edge2_map);
+            let [d8,  d9]  = get_edge_dofs(n0, n3, &mut next_dof, &mut edge2_map);
+            let [d10, d11] = get_edge_dofs(n1, n2, &mut next_dof, &mut edge2_map);
+            let [d12, d13] = get_edge_dofs(n1, n3, &mut next_dof, &mut edge2_map);
+            let [d14, d15] = get_edge_dofs(n2, n3, &mut next_dof, &mut edge2_map);
+
+            dofs_flat[base + 4]  = d4;   dofs_flat[base + 5]  = d5;
+            dofs_flat[base + 6]  = d6;   dofs_flat[base + 7]  = d7;
+            dofs_flat[base + 8]  = d8;   dofs_flat[base + 9]  = d9;
+            dofs_flat[base + 10] = d10;  dofs_flat[base + 11] = d11;
+            dofs_flat[base + 12] = d12;  dofs_flat[base + 13] = d13;
+            dofs_flat[base + 14] = d14;  dofs_flat[base + 15] = d15;
+            // Face DOFs assigned in pass 2.
+        }
+
+        // ── Pass 2: enumerate faces (1 DOF each) ────────────────────────────
+        let mut face_map: HashMap<FaceKey, DofId> = HashMap::new();
+
+        for e in 0..n_elems as u32 {
+            let ns  = mesh.element_nodes(e);
+            let (n0, n1, n2, n3) = (ns[0], ns[1], ns[2], ns[3]);
+            let base = e as usize * dofs_per_elem;
+
+            // Faces: (v0,v1,v2), (v0,v1,v3), (v0,v2,v3), (v1,v2,v3)
+            let faces = [
+                (n0, n1, n2),
+                (n0, n1, n3),
+                (n0, n2, n3),
+                (n1, n2, n3),
+            ];
+            for (k, &(a, b, c)) in faces.iter().enumerate() {
+                let key = FaceKey::new(a, b, c);
+                let dof = *face_map.entry(key).or_insert_with(|| {
+                    let d = next_dof;
+                    next_dof += 1;
+                    d
+                });
+                dofs_flat[base + 16 + k] = dof;
+            }
+        }
+
+        let n_dofs = next_dof as usize;
+        let bubble_dof_start = n_dofs; // no volume bubble for TetP3
+
+        // ── Build DOF coordinates ────────────────────────────────────────────
+        let mut dof_coords = vec![0.0_f64; n_dofs * dim];
+
+        // Vertex coordinates.
+        for n in 0..n_nodes as u32 {
+            let c = mesh.node_coords(n);
+            let base = n as usize * dim;
+            dof_coords[base .. base + dim].copy_from_slice(c);
+        }
+
+        // Edge DOF coordinates (1/3 and 2/3 along each edge).
+        for (&EdgeKey(a, b), &[d0, d1]) in &edge2_map {
+            let ca = mesh.node_coords(a);
+            let cb = mesh.node_coords(b);
+            let base0 = d0 as usize * dim;
+            let base1 = d1 as usize * dim;
+            for d in 0..dim {
+                dof_coords[base0 + d] = (2.0 * ca[d] + cb[d]) / 3.0;
+                dof_coords[base1 + d] = (ca[d] + 2.0 * cb[d]) / 3.0;
+            }
+        }
+
+        // Face DOF coordinates: use face_map + face node lookup for correctness.
+        {
+            let mut face_nodes_map: HashMap<FaceKey, [NodeId; 3]> = HashMap::new();
+            for e in 0..n_elems as u32 {
+                let ns  = mesh.element_nodes(e);
+                let (n0, n1, n2, n3) = (ns[0], ns[1], ns[2], ns[3]);
+                for &(a, b, c) in &[(n0,n1,n2),(n0,n1,n3),(n0,n2,n3),(n1,n2,n3)] {
+                    face_nodes_map.entry(FaceKey::new(a,b,c)).or_insert([a,b,c]);
+                }
+            }
+            for (&key, &dof_id) in &face_map {
+                let nodes = face_nodes_map[&key];
+                let base  = dof_id as usize * dim;
+                for d in 0..dim {
+                    dof_coords[base + d] = nodes.iter().map(|&n| mesh.node_coords(n)[d]).sum::<f64>() / 3.0;
+                }
             }
         }
 
@@ -614,5 +871,52 @@ mod tests {
             assert!(bubble >= dm.bubble_dof_start,
                 "elem {e}: bubble dof {bubble} < bubble_dof_start {}", dm.bubble_dof_start);
         }
+    }
+
+    // ─── TetP3 DOF manager tests ──────────────────────────────────────────────
+
+    #[test]
+    fn tet_p3_dof_manager_basic() {
+        let mesh = SimplexMesh::<3>::unit_cube_tet(2);
+        let dm = DofManager::new(&mesh, 3);
+        // n=2 cube tet: n_nodes = 3×3×3 = 27, n_elements = 6*2³ = 48
+        assert_eq!(dm.dofs_per_elem, 20, "TetP3 must have 20 DOFs per element");
+        assert!(dm.n_dofs > mesh.n_nodes(), "TetP3 must have more DOFs than nodes");
+        // Vertex DOFs: first 4 DOFs of each element should be node IDs.
+        for e in 0..mesh.n_elements() as u32 {
+            let dofs  = dm.element_dofs(e);
+            let nodes = mesh.element_nodes(e);
+            assert_eq!(&dofs[..4], nodes, "elem {e}: first 4 TetP3 DOFs must be vertex node IDs");
+            // All 20 DOFs should be in valid range.
+            for &d in dofs { assert!((d as usize) < dm.n_dofs, "elem {e}: DOF {d} out of range"); }
+        }
+    }
+
+    #[test]
+    fn tet_p3_dof_coords_in_unit_cube() {
+        let mesh = SimplexMesh::<3>::unit_cube_tet(2);
+        let dm = DofManager::new(&mesh, 3);
+        for dof in 0..dm.n_dofs as u32 {
+            let c = dm.dof_coord(dof);
+            for (d, &v) in c.iter().enumerate() {
+                assert!(v >= -1e-12 && v <= 1.0 + 1e-12,
+                    "TetP3 DOF {dof} coord[{d}] = {v} not in [0,1]");
+            }
+        }
+    }
+
+    #[test]
+    fn tet_p3_edge_dofs_shared() {
+        let mesh = SimplexMesh::<3>::unit_cube_tet(1);
+        let dm = DofManager::new(&mesh, 3);
+        // Elements sharing an edge should share the 2 edge DOFs.
+        // Verify edge_dof2_map has consistent entries.
+        assert!(!dm.edge_dof2_map.is_empty(), "TetP3 should have non-empty edge_dof2_map");
+        // Each edge DOF pair must be unique.
+        let mut all_dof_pairs: Vec<[u32; 2]> = dm.edge_dof2_map.values().copied().collect();
+        let len = all_dof_pairs.len();
+        all_dof_pairs.sort_unstable();
+        all_dof_pairs.dedup();
+        assert_eq!(all_dof_pairs.len(), len, "TetP3 edge DOF pairs must be unique per edge");
     }
 }

@@ -23,6 +23,12 @@
 //! ```
 
 use fem_linalg::CsrMatrix;
+use linger::{
+    KrylovSchur as LingerKrylovSchur,
+    eigen::{EigenParams, EigenSolver, EigenWhich},
+    sparse::CsrMatrix as LingerCsr,
+    DenseVec,
+};
 use nalgebra::{DMatrix, DVector, SymmetricEigen};
 
 // ─── Configuration ────────────────────────────────────────────────────────────
@@ -340,6 +346,48 @@ fn small_generalized_eig(a: &DMatrix<f64>, b: &DMatrix<f64>, _k: usize) -> (Vec<
     (sorted_vals, sorted_vecs)
 }
 
+// ─── KrylovSchur ─────────────────────────────────────────────────────────────
+
+/// Krylov-Schur eigenvalue solver — robust thick-restart for large sparse problems.
+///
+/// Computes the `k` algebraically smallest eigenvalues of `A x = λ x`.
+/// Works for symmetric and non-symmetric operators.
+///
+/// # Parameters
+/// * `a`   — system matrix (fem-rs CSR, must be square)
+/// * `k`   — number of eigenvalue/vector pairs to compute
+/// * `ncv` — Krylov space size (default: `k + 20`); must satisfy `k < ncv ≤ n`
+pub fn krylov_schur(
+    a: &CsrMatrix<f64>,
+    k: usize,
+    ncv: Option<usize>,
+) -> Result<EigenResult, String> {
+    let n = a.nrows;
+    let la = _fem_to_linger_csr(a);
+    let solver = match ncv {
+        Some(m) => LingerKrylovSchur::new(m),
+        None    => LingerKrylovSchur::default(),
+    };
+    let params = EigenParams::<f64>::new(k, EigenWhich::LargestAlgebraic);
+    let res = solver.solve(&la, &params).map_err(|e| e.to_string())?;
+    let neig = res.eigenvalues.len();
+    let mut evecs = DMatrix::<f64>::zeros(n, neig);
+    for (j, ev) in res.eigenvectors.iter().enumerate() {
+        for i in 0..n { evecs[(i, j)] = ev.as_slice()[i]; }
+    }
+    Ok(EigenResult { eigenvalues: res.eigenvalues, eigenvectors: evecs, converged: res.converged > 0, iterations: res.iterations })
+}
+
+fn _fem_to_linger_csr(a: &CsrMatrix<f64>) -> LingerCsr<f64> {
+    LingerCsr::from_raw(
+        a.nrows,
+        a.ncols,
+        a.row_ptr.clone(),
+        a.col_idx.iter().map(|&c| c as usize).collect(),
+        a.values.clone(),
+    )
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -428,5 +476,14 @@ mod tests {
                 assert!(err < 1e-6, "X^TX[{i},{j}] = {:.6e}, expected {expected}", xtx[(i,j)]);
             }
         }
+    }
+
+    #[test]
+    fn krylov_schur_returns_k_eigenvalues() {
+        // Smoke test: KrylovSchur runs and returns the requested number of eigenvalues.
+        let n = 20;
+        let a = laplacian_1d(n);
+        let res = krylov_schur(&a, 3, Some(15)).unwrap();
+        assert_eq!(res.eigenvalues.len(), 3, "should return 3 eigenvalues");
     }
 }

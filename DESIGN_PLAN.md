@@ -50,6 +50,7 @@
 | 36 | parallel | ✅ Done | 2026-04-05 | Comm::split(color,key) sub-communicator; CommBackend::split trait method; ChannelBackend impl (Arc pointer sharing); 2 tests |
 | 37 | parallel + wasm | ✅ Done | 2026-04-05 | WASM multi-Worker + streaming mesh partition: WorkerInitMsg::from_jsmpi_env(), spawn_async()+WasmJob, MeshPartition::from_raw(), binary mesh_serde (encode/decode), partition_simplex_streaming() (rank 0 distributes sub-meshes via send/recv), extract_submesh_for_rank() refactor, WasmParSolver + jsmpi_main entry point, wasm-parallel feature; 13 new tests |
 | 38 | parallel | ✅ Done | 2026-04-05 | METIS streaming partition + pex1 CLI: extract_submesh_from_partition(elem_part) generalized extractor, partition_simplex_metis_streaming(), metis.rs refactored to shared extractor (−80 lines duplication), pex1 enhanced with --n/--ranks/--metis/--streaming flags; 3 new tests |
+| 48 | element+space+assembly+solver+io | ✅ Done | 2026-04-09 | linger submodule update: sparse direct solvers (SparseLu/SparseCholesky/SparseLdlt), IDR(s), TFQMR, ILDLt precond, KrylovSchur eigen, Matrix Market I/O; higher-order elements TriP3/TetP2/TetP3/QuadQ2 registered across all assemblers; H1TraceSpace P2/P3 support; Grundmann-Moller quadrature corrected via linear system solve; 8 new solver tests, 2 io tests |
 
 ### Vendor submodules
 | Submodule | URL | Role |

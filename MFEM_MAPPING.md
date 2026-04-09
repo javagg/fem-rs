@@ -89,11 +89,11 @@
 |---|---|---|
 | `FiniteElement` (base) | `ReferenceElement` trait | ✅ |
 | `Poly_1D` utility | inline basis in `lagrange/` | ✅ |
-| `H1_SegmentElement` | `lagrange::seg::P1Seg`, `P2Seg` | ✅ |
-| `H1_TriangleElement` | `lagrange::tri::P1Tri`, `P2Tri` | ✅ |
-| `H1_TetrahedronElement` | `lagrange::tet::P1Tet`, `P2Tet` | ✅ |
-| `H1_QuadrilateralElement` | `lagrange::quad::Q1Quad` | ✅ |
-| `H1_HexahedronElement` | `lagrange::hex::Q1Hex` | ✅ |
+| `H1_SegmentElement` P1/P2/P3 | `SegP1`, `SegP2`, `SegP3` | ✅ |
+| `H1_TriangleElement` P1/P2/P3 | `TriP1`, `TriP2`, `TriP3` | ✅ |
+| `H1_TetrahedronElement` P1/P2/P3 | `TetP1`, `TetP2`, `TetP3` | ✅ |
+| `H1_QuadrilateralElement` Q1/Q2 | `QuadQ1`, `QuadQ2` | ✅ |
+| `H1_HexahedronElement` | `HexQ1` | ✅ |
 | `ND_TriangleElement` | `nedelec::TriND1` | ✅ |
 | `ND_TetrahedronElement` | `nedelec::TetND1` | ✅ |
 | `RT_TriangleElement` | `raviart_thomas::TriRT0` | ✅ |
@@ -108,7 +108,7 @@
 | `IntegrationRules` (table) | `quadrature.rs` look-up table | ✅ |
 | Gauss-Legendre 1D (orders 1–10) | `gauss_legendre_1d(order)` | ✅ |
 | Gauss-Legendre on triangle | `gauss_triangle(order)` | ✅ |
-| Gauss-Legendre on tet | `gauss_tet(order)` | ✅ |
+| Gauss-Legendre on tet | `gauss_tet(order)` + Grundmann-Moller | ✅ |
 | Tensor product (quad, hex) | `tensor_gauss(order, dim)` | ✅ |
 | Gauss-Lobatto | `gauss_lobatto_1d`, `seg_lobatto_rule`, `quad_lobatto_rule`, `hex_lobatto_rule` | ✅ |
 
@@ -120,12 +120,12 @@
 
 | MFEM collection | Mathematical space | fem-rs struct | Status |
 |---|---|---|---|
-| `H1_FECollection(p)` | H¹(Ω): C⁰ scalar Lagrange | `H1Space` | ✅ |
+| `H1_FECollection(p)` | H¹(Ω): C⁰ scalar Lagrange | `H1Space` (P1–P3) | ✅ |
 | `L2_FECollection(p)` | L²(Ω): discontinuous Lagrange | `L2Space` | ✅ |
 | `DG_FECollection(p)` | L²(Ω): DG (element-interior only) | `L2Space` | ✅ |
 | `ND_FECollection(p)` | H(curl): Nédélec tangential | `HCurlSpace` | ✅ |
 | `RT_FECollection(p)` | H(div): Raviart-Thomas normal | `HDivSpace` | ✅ |
-| `H1_Trace_FECollection` | H½: traces of H¹ on faces | `H1TraceSpace` | ✅ | P1 boundary trace |
+| `H1_Trace_FECollection` | H½: traces of H¹ on faces | `H1TraceSpace` | ✅ | P1–P3 boundary trace |
 | `NURBS_FECollection` | NURBS isogeometric | — | ❌ out of scope |
 
 ### 3.2 Finite Element Space (DOF management)
@@ -258,6 +258,7 @@ default (zero-cost for constants).
 | `SparseMatrix::Mult(A,B)` | SpGEMM (via linger) | ✅ |
 | `DenseMatrix` (local dense) | `nalgebra::SMatrix` | ✅ |
 | `DenseTensor` | `DenseTensor` (3-D array) | ✅ | Row-major slab access |
+| Matrix Market read/write | `fem_io::read_matrix_market` / `write_matrix_market` | ✅ | `.mtx` COO/CSR, real/symmetric/pattern |
 
 ### 6.2 Vector
 
@@ -281,14 +282,16 @@ default (zero-cost for constants).
 | MFEM solver | Problem type | fem-rs module | Status |
 |---|---|---|---|
 | `CGSolver` | SPD: A x = b | `solver` (via linger) | ✅ |
-| `PCGSolver` | SPD + preconditioner | `solver` (PCG+Jacobi/ILU0) | ✅ |
+| `PCGSolver` | SPD + preconditioner | `solver` (PCG+Jacobi/ILU0/ILDLt) | ✅ |
 | `GMRESSolver(m)` | General: A x = b | `solver` (via linger) | ✅ |
 | `FGMRESSolver` | Flexible GMRES | `solve_fgmres` / `solve_fgmres_jacobi` | ✅ |
 | `BiCGSTABSolver` | Non-symmetric | `solver` (via linger) | ✅ |
+| IDR(s) | Non-symmetric, short-recurrence | `solve_idrs` | ✅ |
+| TFQMR | Transpose-free QMR | `solve_tfqmr` | ✅ |
 | `MINRESSolver` | Indefinite symmetric | `MinresSolver` | ✅ |
 | `SLISolver` | Stationary linear iteration | `solve_jacobi_sli` / `solve_gs_sli` | ✅ |
 | `NewtonSolver` | Nonlinear F(x)=0 | `NewtonSolver` | ✅ |
-| `UMFPackSolver` | Direct (SuiteSparse) | `dense::lu_solve` (small systems) | ✅ |
+| `UMFPackSolver` | Direct (SuiteSparse) | `solve_sparse_lu` / `solve_sparse_cholesky` / `solve_sparse_ldlt` | ✅ Pure-Rust sparse direct |
 | `MUMPSSolver` | Parallel direct | — | ❌ |
 
 ### 7.2 Preconditioners
@@ -299,6 +302,7 @@ default (zero-cost for constants).
 | `GSSmoother` | Gauss-Seidel | `SmootherKind::GaussSeidel` (AMG) | ✅ |
 | Chebyshev smoother | Chebyshev polynomial | `SmootherType::Chebyshev` | ✅ |
 | `SparseSmoothedProjection` | ILU-based | PCG+ILU0 (via linger) | ✅ |
+| Incomplete LDLᵀ | Symmetric indefinite preconditioning | `IldltPrecond` via `solve_pcg_ildlt` / `solve_gmres_ildlt` | ✅ |
 | `BlockDiagonalPreconditioner` | Block Jacobi | `BlockDiagonalPrecond` | ✅ |
 | `BlockTriangularPreconditioner` | Block triangular | `BlockTriangularPrecond` | ✅ |
 | `SchurComplement` | Elimination for saddle point | `SchurComplementSolver` | ✅ |
@@ -319,6 +323,8 @@ default (zero-cost for constants).
 
 | MFEM / hypre concept | fem-rs equivalent | Status |
 |---|---|---|
+| `LOBPCGSolver` | Block eigensolver for SPD | `lobpcg` / `LobpcgSolver` | ✅ |
+| Krylov-Schur | Thick-restart Arnoldi eigensolver | `krylov_schur` | ✅ |
 | `HypreBoomerAMG` (setup) | `AmgSolver::setup(mat)` → hierarchy | ✅ |
 | `HypreBoomerAMG` (solve) | `AmgSolver::solve(hierarchy, rhs)` | ✅ |
 | Strength of connection θ | `AmgParams::theta` | ✅ |
@@ -548,6 +554,7 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 | 45 | `wasm`+`e2e` | Browser E2E test: WASM Poisson solver verified via Playwright/Chromium | ✅ |
 | 46 | `mesh`+`linalg`+`solver`+`space`+`io` | Backlog: bounding_box, periodic mesh, DenseTensor, SLI, H1Trace, VTK reader, PrintLevel | ✅ |
 | 47 | `mesh`+`space` | NCMesh: Tri3/Tet4 nonconforming refine + hanging constraints + `NCState`/`NCState3D` multi-level + P2 prolongation | ✅ |
+| 48 | `element`+`space`+`assembly`+`solver`+`io` | linger update: sparse direct solvers (SparseLu/Cholesky/LDLt), IDR(s), TFQMR, ILDLt precond, KrylovSchur eigen, Matrix Market I/O; higher-order elements: TriP3, TetP2, TetP3, QuadQ2; H1TraceSpace P2/P3; Grundmann-Moller quadrature fix | ✅ |
 
 ---
 
@@ -709,3 +716,16 @@ prioritized roadmap for continued development.
 | HDF5/XDMF I/O | TBD | Large-scale checkpointing |
 | Restart files | TBD | Requires HDF5 |
 | Tet4 NC AMR example | ✅ | ~~TBD~~ Done (`ex15_tet_nc_amr`, supports `--solve`) |
+
+### Phase 48 — linger Update + Higher-Order Elements ✅
+> **Completed** — sparse direct solvers, new Krylov methods, higher-order FEM
+
+- ✅ Sparse direct solvers: `SparseLu`, `SparseCholesky`, `SparseLdlt` (pure-Rust, WASM-compatible)
+- ✅ New iterative methods: `IDR(s)` (`solve_idrs`), `TFQMR` (`solve_tfqmr`)
+- ✅ New preconditioner: `ILDLt` (`solve_pcg_ildlt`, `solve_gmres_ildlt`) for symmetric indefinite
+- ✅ KrylovSchur eigenvalue solver (`krylov_schur`) — thick-restart Arnoldi
+- ✅ Matrix Market I/O: `read_matrix_market`, `read_matrix_market_coo`, `write_matrix_market`
+- ✅ Higher-order elements: `TriP3`, `TetP2`, `TetP3`, `QuadQ2`, `SegP3` — fully registered
+- ✅ H1TraceSpace P2/P3 boundary trace support
+- ✅ Grundmann-Moller tet quadrature fix (linear system solver, correct for all orders)
+- ✅ reed submodule bug fix (`create_basis_h1_simplex` lock pattern)

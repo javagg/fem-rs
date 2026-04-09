@@ -209,10 +209,71 @@ fn poisson_p3_convergence_rate() {
 
 // ─── Quad4 Poisson tests ────────────────────────────────────────────────────
 
-/// Solve Poisson on a Quad4 mesh and return the max nodal error.
-fn solve_poisson_quad(n: usize) -> f64 {
+/// Compute ||u_h − u_exact||_{L2(Ω)} on a Quad4 mesh.
+///
+/// For a Q1 element the map from reference [-1,1]² to physical coords is bilinear.
+/// On a uniform axis-aligned mesh every element is an affine parallelogram with
+/// det_J = (h/2)² where h = 1/n, but we compute it properly via the Jacobian.
+fn l2_error_quad(uh: &[f64], space: &H1Space<SimplexMesh<2>>) -> f64 {
     use fem_element::lagrange::QuadQ1;
+    let ref_elem = QuadQ1;
+    let mesh = space.mesh();
+    let quad = ref_elem.quadrature(4);  // 4th-order Gauss rule on [-1,1]²
+    let n_ldofs = ref_elem.n_dofs();
+    let mut phi = vec![0.0_f64; n_ldofs];
+    let mut err_sq = 0.0_f64;
 
+    for e in mesh.elem_iter() {
+        let nodes = mesh.element_nodes(e);
+        let dofs  = space.element_dofs(e);
+
+        // Physical node coords: n0=(x0,y0)..n3=(x3,y3) in CCW order.
+        let x: Vec<[f64; 2]> = nodes.iter()
+            .map(|&n| { let c = mesh.node_coords(n); [c[0], c[1]] })
+            .collect();
+
+        for (q, xi) in quad.points.iter().enumerate() {
+            let (xi0, xi1) = (xi[0], xi[1]);
+
+            // Bilinear shape functions on [-1,1]²: N_i = (1+xi_i*xi)(1+eta_i*eta)/4
+            let n_sf = [
+                0.25*(1.0-xi0)*(1.0-xi1),
+                0.25*(1.0+xi0)*(1.0-xi1),
+                0.25*(1.0+xi0)*(1.0+xi1),
+                0.25*(1.0-xi0)*(1.0+xi1),
+            ];
+            // Physical coordinates at QP.
+            let xp = [
+                n_sf[0]*x[0][0] + n_sf[1]*x[1][0] + n_sf[2]*x[2][0] + n_sf[3]*x[3][0],
+                n_sf[0]*x[0][1] + n_sf[1]*x[1][1] + n_sf[2]*x[2][1] + n_sf[3]*x[3][1],
+            ];
+
+            // Jacobian: ∂x/∂ξ, ∂x/∂η, etc.
+            let dndxi  = [
+                -0.25*(1.0-xi1),  0.25*(1.0-xi1),  0.25*(1.0+xi1), -0.25*(1.0+xi1),
+            ];
+            let dndeta = [
+                -0.25*(1.0-xi0), -0.25*(1.0+xi0),  0.25*(1.0+xi0),  0.25*(1.0-xi0),
+            ];
+            let dxdxi  = dndxi[0]*x[0][0]  + dndxi[1]*x[1][0]  + dndxi[2]*x[2][0]  + dndxi[3]*x[3][0];
+            let dydxi  = dndxi[0]*x[0][1]  + dndxi[1]*x[1][1]  + dndxi[2]*x[2][1]  + dndxi[3]*x[3][1];
+            let dxdeta = dndeta[0]*x[0][0] + dndeta[1]*x[1][0] + dndeta[2]*x[2][0] + dndeta[3]*x[3][0];
+            let dydeta = dndeta[0]*x[0][1] + dndeta[1]*x[1][1] + dndeta[2]*x[2][1] + dndeta[3]*x[3][1];
+            let det_j = (dxdxi * dydeta - dxdeta * dydxi).abs();
+
+            ref_elem.eval_basis(xi, &mut phi);
+            let uh_q: f64 = dofs.iter().zip(phi.iter())
+                .map(|(&d, &p)| uh[d as usize] * p).sum();
+
+            let diff = uh_q - u_exact(&xp);
+            err_sq += quad.weights[q] * det_j * diff * diff;
+        }
+    }
+    err_sq.sqrt()
+}
+
+/// Solve Poisson on a Quad4 mesh and return the L2 error.
+fn solve_poisson_quad(n: usize) -> f64 {
     let mesh = SimplexMesh::<2>::unit_square_quad(n);
     let space = H1Space::new(mesh.clone(), 1);
 
@@ -227,23 +288,14 @@ fn solve_poisson_quad(n: usize) -> f64 {
     apply_dirichlet(&mut mat, &mut rhs, &bdofs, &values);
 
     let uh = dense_solve(&mat, &rhs);
-
-    // Max nodal error
-    let dm = space.dof_manager();
-    let mut max_err = 0.0_f64;
-    for i in 0..dm.n_dofs {
-        let c = dm.dof_coord(i as u32);
-        let err = (uh[i] - u_exact(c)).abs();
-        if err > max_err { max_err = err; }
-    }
-    max_err
+    l2_error_quad(&uh, &space)
 }
 
 #[test]
 fn poisson_q1_16x16_error() {
     let err = solve_poisson_quad(16);
-    println!("Q1 16×16 max nodal error = {err:.3e}");
-    assert!(err < 2e-2, "Q1 max error too large: {err:.3e}");
+    println!("Q1 16×16 L2 error = {err:.3e}");
+    assert!(err < 6e-3, "Q1 L2 error too large: {err:.3e}");
 }
 
 #[test]
@@ -253,6 +305,95 @@ fn poisson_q1_convergence_rate() {
     let rate = (err8 / err16).log2();
     println!("Q1 quad convergence rate = {rate:.2}");
     assert!(rate > 1.8, "Q1 convergence rate {rate:.2} < 1.8");
+}
+
+// ─── Quad Q2 Poisson tests ───────────────────────────────────────────────────
+
+/// L2 error on a Q2 (9-node biquadratic) mesh.
+///
+/// Uses Q1 bilinear geometry map (4 mesh nodes per element) but Q2 solution
+/// basis (9 DOFs per element: 4 corners + 4 edge midpoints + 1 interior).
+fn l2_error_quad2(uh: &[f64], space: &H1Space<SimplexMesh<2>>) -> f64 {
+    use fem_element::lagrange::QuadQ2;
+    let ref_elem = QuadQ2;
+    let geo_elem = fem_element::lagrange::QuadQ1;
+    let mesh = space.mesh();
+    let quad = ref_elem.quadrature(6);  // 6th-order rule for degree-4 integrands
+    let n_ldofs = ref_elem.n_dofs();
+    let n_geo = geo_elem.n_dofs();
+    let mut phi = vec![0.0_f64; n_ldofs];
+    let mut phi_geo  = vec![0.0_f64; n_geo];
+    let mut dndxi_geo = vec![0.0_f64; n_geo * 2];
+    let mut err_sq = 0.0_f64;
+
+    for e in mesh.elem_iter() {
+        let nodes = mesh.element_nodes(e);
+        let dofs  = space.element_dofs(e);
+
+        let x: Vec<[f64; 2]> = nodes.iter()
+            .map(|&n| { let c = mesh.node_coords(n); [c[0], c[1]] })
+            .collect();
+
+        for (q, xi) in quad.points.iter().enumerate() {
+            // Geometry: bilinear Q1 map.
+            geo_elem.eval_basis(xi, &mut phi_geo);
+            geo_elem.eval_grad_basis(xi, &mut dndxi_geo);
+
+            let xp = [
+                (0..n_geo).map(|k| phi_geo[k] * x[k][0]).sum::<f64>(),
+                (0..n_geo).map(|k| phi_geo[k] * x[k][1]).sum::<f64>(),
+            ];
+
+            let dxdxi  = (0..n_geo).map(|k| dndxi_geo[k*2]   * x[k][0]).sum::<f64>();
+            let dydxi  = (0..n_geo).map(|k| dndxi_geo[k*2]   * x[k][1]).sum::<f64>();
+            let dxdeta = (0..n_geo).map(|k| dndxi_geo[k*2+1] * x[k][0]).sum::<f64>();
+            let dydeta = (0..n_geo).map(|k| dndxi_geo[k*2+1] * x[k][1]).sum::<f64>();
+            let det_j = (dxdxi * dydeta - dxdeta * dydxi).abs();
+
+            // Solution: Q2 basis.
+            ref_elem.eval_basis(xi, &mut phi);
+            let uh_q: f64 = dofs.iter().zip(phi.iter())
+                .map(|(&d, &p)| uh[d as usize] * p).sum();
+
+            let diff = uh_q - u_exact(&xp);
+            err_sq += quad.weights[q] * det_j * diff * diff;
+        }
+    }
+    err_sq.sqrt()
+}
+
+fn solve_poisson_q2(n: usize) -> f64 {
+    let mesh = SimplexMesh::<2>::unit_square_quad(n);
+    let space = H1Space::new(mesh.clone(), 2);
+
+    let diffusion = DiffusionIntegrator { kappa: 1.0 };
+    let source    = DomainSourceIntegrator::new(forcing);
+
+    let mut mat = Assembler::assemble_bilinear(&space, &[&diffusion], 5);
+    let mut rhs = Assembler::assemble_linear(&space, &[&source], 5);
+
+    let bdofs  = boundary_dofs(&mesh, space.dof_manager(), &[1, 2, 3, 4]);
+    let values = vec![0.0_f64; bdofs.len()];
+    apply_dirichlet(&mut mat, &mut rhs, &bdofs, &values);
+
+    let uh = dense_solve(&mat, &rhs);
+    l2_error_quad2(&uh, &space)
+}
+
+#[test]
+fn poisson_q2_16x16_error() {
+    let err = solve_poisson_q2(16);
+    println!("Q2 16×16 L2 error = {err:.3e}");
+    assert!(err < 1e-4, "Q2 L2 error too large: {err:.3e}");
+}
+
+#[test]
+fn poisson_q2_convergence_rate() {
+    let err8  = solve_poisson_q2(8);
+    let err16 = solve_poisson_q2(16);
+    let rate = (err8 / err16).log2();
+    println!("Q2 convergence rate = {rate:.2}");
+    assert!(rate > 2.5, "Q2 convergence rate {rate:.2} < 2.5");
 }
 
 /// Patch test: a linear function u(x,y)=x is exactly represented by P1
@@ -290,7 +431,7 @@ fn patch_test_linear_p1() {
 
 // ─── 3D TetP1 / TetP2 Poisson tests ─────────────────────────────────────────
 
-use fem_element::lagrange::{TetP1, TetP2};
+use fem_element::lagrange::{TetP1, TetP2, TetP3};
 
 /// 3-D exact solution: u(x,y,z) = sin(πx) sin(πy) sin(πz),
 /// forcing: f = 3π² u.
@@ -306,6 +447,7 @@ fn l2_error_3d<M: MeshTopology>(uh: &[f64], space: &H1Space<M>, order: u8) -> f6
     let ref_elem: Box<dyn ReferenceElement> = match order {
         1 => Box::new(TetP1),
         2 => Box::new(TetP2),
+        3 => Box::new(TetP3),
         _ => panic!("unsupported order"),
     };
     let mesh = space.mesh();
@@ -410,4 +552,24 @@ fn poisson_tet_p2_convergence_rate() {
     let rate = (err4 / err8).log2();
     println!("TetP2 convergence rate = {rate:.2}");
     assert!(rate > 2.5, "TetP2 convergence rate {rate:.2} < 2.5");
+}
+
+/// TetP3 3D Poisson: L2 error on a 4×4×4 mesh (O(h⁴)).
+#[test]
+fn poisson_tet_p3_l2_error() {
+    let err = solve_poisson_3d(4, 3);
+    println!("TetP3 4×4×4 L2 error = {err:.3e}");
+    assert!(err < 5e-3, "TetP3 3D L2 error too large: {err:.3e}");
+}
+
+/// TetP3 convergence rate ≥ 3.5 (theory: O(h⁴)).
+/// NOTE: n=8 3D mesh with P3 is slow in debug mode; mark as #[ignore] for CI.
+#[test]
+#[ignore]
+fn poisson_tet_p3_convergence_rate() {
+    let err4 = solve_poisson_3d(4, 3);
+    let err8 = solve_poisson_3d(8, 3);
+    let rate = (err4 / err8).log2();
+    println!("TetP3 convergence rate = {rate:.2}");
+    assert!(rate > 3.5, "TetP3 convergence rate {rate:.2} < 3.5");
 }

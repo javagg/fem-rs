@@ -72,6 +72,55 @@ impl ReferenceElement for SegP2 {
     }
 }
 
+// ─── P3 ───────────────────────────────────────────────────────────────────────
+
+/// Cubic Lagrange element on `[0, 1]` — 4 DOFs: two vertices + two interior points.
+///
+/// DOF order:
+/// - 0: ξ = 0     (vertex)
+/// - 1: ξ = 1     (vertex)
+/// - 2: ξ = 1/3   (interior)
+/// - 3: ξ = 2/3   (interior)
+///
+/// Basis (Lagrange interpolation through 0, 1, 1/3, 2/3):
+/// - φ₀ = −9/2·(ξ−1)(ξ−1/3)(ξ−2/3)  = −9ξ³/2 + 9ξ² − 11ξ/2 + 1
+/// - φ₁ =  9/2·ξ(ξ−1/3)(ξ−2/3)       =  9ξ³/2 − 9ξ²/2 + ξ
+/// - φ₂ =  27/2·ξ(ξ−1)(ξ−2/3)        =  27ξ³/2 − 45ξ²/2 + 9ξ
+/// - φ₃ = −27/2·ξ(ξ−1)(ξ−1/3)        = −27ξ³/2 + 18ξ² − 9ξ/2
+pub struct SegP3;
+
+impl ReferenceElement for SegP3 {
+    fn dim(&self)    -> u8     { 1 }
+    fn order(&self)  -> u8     { 3 }
+    fn n_dofs(&self) -> usize  { 4 }
+
+    fn eval_basis(&self, xi: &[f64], values: &mut [f64]) {
+        let x  = xi[0];
+        let x2 = x * x;
+        let x3 = x2 * x;
+        values[0] = -4.5 * x3 + 9.0 * x2 - 5.5 * x + 1.0;
+        values[1] =  4.5 * x3 - 4.5 * x2 + x;
+        values[2] = 13.5 * x3 - 22.5 * x2 + 9.0 * x;
+        values[3] = -13.5 * x3 + 18.0 * x2 - 4.5 * x;
+    }
+
+    fn eval_grad_basis(&self, xi: &[f64], grads: &mut [f64]) {
+        let x  = xi[0];
+        let x2 = x * x;
+        // grads[i] = ∂φᵢ/∂ξ  (dim=1, so grads[i*1+0] = grads[i])
+        grads[0] = -13.5 * x2 + 18.0 * x - 5.5;
+        grads[1] =  13.5 * x2 -  9.0 * x + 1.0;
+        grads[2] =  40.5 * x2 - 45.0 * x + 9.0;
+        grads[3] = -40.5 * x2 + 36.0 * x - 4.5;
+    }
+
+    fn quadrature(&self, order: u8) -> QuadratureRule { seg_rule(order) }
+
+    fn dof_coords(&self) -> Vec<Vec<f64>> {
+        vec![vec![0.0], vec![1.0], vec![1.0 / 3.0], vec![2.0 / 3.0]]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,5 +165,44 @@ mod tests {
         assert!((phi[0]).abs() < 1e-14);
         assert!((phi[1]).abs() < 1e-14);
         assert!((phi[2] - 1.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn seg_p3_partition_of_unity() { check_partition_of_unity(&SegP3); }
+    #[test]
+    fn seg_p3_grad_sum_zero()      { check_grad_sum_zero(&SegP3); }
+
+    #[test]
+    fn seg_p3_vertex_dofs() {
+        // DOF 0 at ξ=0, DOF 1 at ξ=1 — all others should vanish.
+        let mut phi = vec![0.0; 4];
+        SegP3.eval_basis(&[0.0], &mut phi);
+        assert!((phi[0] - 1.0).abs() < 1e-14, "phi0(0)={}", phi[0]);
+        assert!(phi[1].abs() < 1e-14);
+        assert!(phi[2].abs() < 1e-14);
+        assert!(phi[3].abs() < 1e-14);
+
+        SegP3.eval_basis(&[1.0], &mut phi);
+        assert!(phi[0].abs() < 1e-14);
+        assert!((phi[1] - 1.0).abs() < 1e-14, "phi1(1)={}", phi[1]);
+        assert!(phi[2].abs() < 1e-14);
+        assert!(phi[3].abs() < 1e-14);
+    }
+
+    #[test]
+    fn seg_p3_interior_dofs() {
+        // DOF 2 at ξ=1/3, DOF 3 at ξ=2/3 — Lagrange delta property.
+        let mut phi = vec![0.0; 4];
+        SegP3.eval_basis(&[1.0 / 3.0], &mut phi);
+        assert!(phi[0].abs() < 1e-13);
+        assert!(phi[1].abs() < 1e-13);
+        assert!((phi[2] - 1.0).abs() < 1e-13, "phi2(1/3)={}", phi[2]);
+        assert!(phi[3].abs() < 1e-13);
+
+        SegP3.eval_basis(&[2.0 / 3.0], &mut phi);
+        assert!(phi[0].abs() < 1e-13);
+        assert!(phi[1].abs() < 1e-13);
+        assert!(phi[2].abs() < 1e-13);
+        assert!((phi[3] - 1.0).abs() < 1e-13, "phi3(2/3)={}", phi[3]);
     }
 }

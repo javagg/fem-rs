@@ -1,23 +1,30 @@
 //! # fem-solver
 //!
-//! Iterative linear solvers backed by [`linger`] — a pure-Rust FEA solver library.
+//! Iterative and direct linear solvers backed by [`linger`].
 //!
-//! ## Solvers
+//! ## Iterative solvers
 //! - [`solve_cg`]          — Conjugate Gradient (SPD systems)
 //! - [`solve_pcg_jacobi`]  — PCG with Jacobi preconditioner
 //! - [`solve_pcg_ilu0`]    — PCG with ILU(0) preconditioner
 //! - [`solve_gmres`]       — GMRES (non-symmetric systems)
 //! - [`solve_bicgstab`]    — BiCGSTAB
+//! - [`solve_idrs`]        — IDR(s) (non-symmetric, short-recurrence)
+//! - [`solve_tfqmr`]       — TFQMR (Transpose-Free QMR)
 //!
-//! All solvers operate on [`fem_linalg::CsrMatrix<T>`] and return a
-//! [`SolveResult`] with iteration count and final residual.
+//! ## Direct solvers
+//! - [`solve_sparse_lu`]        — Sparse LU for general systems
+//! - [`solve_sparse_cholesky`]  — Sparse Cholesky for SPD systems
+//! - [`solve_sparse_ldlt`]      — Sparse LDLᵀ for symmetric indefinite systems
+//!
+//! All solvers operate on [`fem_linalg::CsrMatrix<T>`].
 
 use fem_linalg::CsrMatrix as FemCsr;
 use linger::{
     core::scalar::Scalar as LingerScalar,
-    iterative::{BiCgStab, ConjugateGradient, Fgmres, Gmres},
+    direct::{DirectSolver, SparseLu, SparseCholesky, SparseLdlt},
+    iterative::{BiCgStab, ConjugateGradient, Fgmres, Gmres, Idrs, Tfqmr},
     sparse::CsrMatrix as LingerCsr,
-    DenseVec, Ilu0Precond, JacobiPrecond, KrylovSolver, SolverParams, VerboseLevel,
+    DenseVec, Ilu0Precond, IldltPrecond, JacobiPrecond, KrylovSolver, SolverParams, VerboseLevel,
 };
 use thiserror::Error;
 
@@ -272,8 +279,7 @@ pub fn solve_fgmres<T: LingerScalar>(
 }
 
 /// Flexible GMRES with Jacobi preconditioner.
-pub fn solve_fgmres_jacobi<T: LingerScalar>(
-    a: &FemCsr<T>,
+pub fn solve_fgmres_jacobi<T: LingerScalar>(    a: &FemCsr<T>,
     b: &[T],
     x: &mut [T],
     restart: usize,
@@ -293,6 +299,149 @@ pub fn solve_fgmres_jacobi<T: LingerScalar>(
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// ─── ILDLt preconditioned solvers ────────────────────────────────────────────
+
+/// Preconditioned CG with an incomplete LDLᵀ preconditioner.
+///
+/// Best for symmetric positive-definite systems where ILU(0) may struggle.
+/// ILDLt is more robust than ILU(0) for nearly-singular or ill-conditioned
+/// symmetric matrices (e.g., Poisson with extreme aspect ratios).
+pub fn solve_pcg_ildlt<T: LingerScalar>(
+    a: &FemCsr<T>,
+    b: &[T],
+    x: &mut [T],
+    cfg: &SolverConfig,
+) -> Result<SolveResult, SolverError> {
+    check_dims(a, b, x)?;
+    let la = fem_to_linger_csr(a);
+    let lb = DenseVec::from_vec(b.to_vec());
+    let mut lx = DenseVec::from_vec(x.to_vec());
+    let prec = IldltPrecond::from_csr(&la).map_err(|e| SolverError::Linger(e.to_string()))?;
+    let res = ConjugateGradient::<T>::default()
+        .solve(&la, Some(&prec), &lb, &mut lx, &cfg.to_linger())
+        .map_err(SolverError::from)?;
+    x.copy_from_slice(lx.as_slice());
+    Ok(into_result(res))
+}
+
+/// GMRES with incomplete LDLᵀ preconditioner for symmetric indefinite systems.
+///
+/// Ideal for saddle-point problems (Stokes, Maxwell) where Cholesky/ILU fail.
+pub fn solve_gmres_ildlt<T: LingerScalar>(
+    a: &FemCsr<T>,
+    b: &[T],
+    x: &mut [T],
+    restart: usize,
+    cfg: &SolverConfig,
+) -> Result<SolveResult, SolverError> {
+    check_dims(a, b, x)?;
+    let la = fem_to_linger_csr(a);
+    let lb = DenseVec::from_vec(b.to_vec());
+    let mut lx = DenseVec::from_vec(x.to_vec());
+    let prec = IldltPrecond::from_csr(&la).map_err(|e| SolverError::Linger(e.to_string()))?;
+    let solver = Gmres::<T>::new(restart);
+    let res = solver
+        .solve(&la, Some(&prec), &lb, &mut lx, &cfg.to_linger())
+        .map_err(SolverError::from)?;
+    x.copy_from_slice(lx.as_slice());
+    Ok(into_result(res))
+}
+
+// ─── IDR(s) ──────────────────────────────────────────────────────────────────
+
+/// IDR(s) — Induced Dimension Reduction for non-symmetric systems.
+///
+/// Short-recurrence method; s=4 is a good default.  Typically fewer matvecs
+/// than BiCGSTAB for difficult non-symmetric problems.
+pub fn solve_idrs<T: LingerScalar>(
+    a: &FemCsr<T>,
+    b: &[T],
+    x: &mut [T],
+    s: usize,
+    cfg: &SolverConfig,
+) -> Result<SolveResult, SolverError> {
+    check_dims(a, b, x)?;
+    let la = fem_to_linger_csr(a);
+    let lb = DenseVec::from_vec(b.to_vec());
+    let mut lx = DenseVec::from_vec(x.to_vec());
+    let solver = Idrs::<T>::new(s);
+    let res = solver
+        .solve(&la, None, &lb, &mut lx, &cfg.to_linger())
+        .map_err(SolverError::from)?;
+    x.copy_from_slice(lx.as_slice());
+    Ok(into_result(res))
+}
+
+/// TFQMR — Transpose-Free Quasi-Minimal Residual for non-symmetric systems.
+///
+/// Does not require the transpose of A; converges smoothly on problems where
+/// BiCGSTAB may stagnate.
+pub fn solve_tfqmr<T: LingerScalar>(
+    a: &FemCsr<T>,
+    b: &[T],
+    x: &mut [T],
+    cfg: &SolverConfig,
+) -> Result<SolveResult, SolverError> {
+    check_dims(a, b, x)?;
+    let la = fem_to_linger_csr(a);
+    let lb = DenseVec::from_vec(b.to_vec());
+    let mut lx = DenseVec::from_vec(x.to_vec());
+    let res = Tfqmr::<T>::default()
+        .solve(&la, None, &lb, &mut lx, &cfg.to_linger())
+        .map_err(SolverError::from)?;
+    x.copy_from_slice(lx.as_slice());
+    Ok(into_result(res))
+}
+
+// ─── Direct solvers ───────────────────────────────────────────────────────────
+
+/// Sparse LU direct solver for general square systems.
+///
+/// Exact solve (up to floating-point precision).  Use for small-to-medium
+/// problems or as a reference/preconditioner.
+pub fn solve_sparse_lu<T: LingerScalar>(
+    a: &FemCsr<T>,
+    b: &[T],
+) -> Result<Vec<T>, SolverError> {
+    let la = fem_to_linger_csr(a);
+    let lb = DenseVec::from_vec(b.to_vec());
+    let mut lx = DenseVec::zeros(b.len());
+    let mut solver = SparseLu::<T>::default();
+    solver.factor(&la).map_err(|e| SolverError::Linger(e.to_string()))?;
+    solver.solve(&lb, &mut lx).map_err(|e| SolverError::Linger(e.to_string()))?;
+    Ok(lx.into_vec())
+}
+
+/// Sparse Cholesky direct solver for symmetric positive-definite systems.
+///
+/// About 2× faster than LU for SPD matrices.
+pub fn solve_sparse_cholesky<T: LingerScalar>(
+    a: &FemCsr<T>,
+    b: &[T],
+) -> Result<Vec<T>, SolverError> {
+    let la = fem_to_linger_csr(a);
+    let lb = DenseVec::from_vec(b.to_vec());
+    let mut lx = DenseVec::zeros(b.len());
+    let mut solver = SparseCholesky::<T>::default();
+    solver.factor(&la).map_err(|e| SolverError::Linger(e.to_string()))?;
+    solver.solve(&lb, &mut lx).map_err(|e| SolverError::Linger(e.to_string()))?;
+    Ok(lx.into_vec())
+}
+
+/// Sparse LDLᵀ direct solver for symmetric indefinite systems (Stokes, Maxwell saddle-point).
+pub fn solve_sparse_ldlt<T: LingerScalar>(
+    a: &FemCsr<T>,
+    b: &[T],
+) -> Result<Vec<T>, SolverError> {
+    let la = fem_to_linger_csr(a);
+    let lb = DenseVec::from_vec(b.to_vec());
+    let mut lx = DenseVec::zeros(b.len());
+    let mut solver = SparseLdlt::<T>::default();
+    solver.factor(&la).map_err(|e| SolverError::Linger(e.to_string()))?;
+    solver.solve(&lb, &mut lx).map_err(|e| SolverError::Linger(e.to_string()))?;
+    Ok(lx.into_vec())
+}
 
 fn check_dims<T>(a: &FemCsr<T>, b: &[T], x: &[T]) -> Result<(), SolverError> {
     if a.nrows != b.len() || a.ncols != x.len() {
@@ -317,7 +466,7 @@ pub mod block;
 pub mod eigen;
 pub mod ode;
 pub use block::{BlockSystem, BlockDiagonalPrecond, BlockTriangularPrecond, SchurComplementSolver, MinresSolver};
-pub use eigen::{lobpcg, LobpcgConfig, LobpcgSolver, EigenResult, GeneralizedEigenSolver};
+pub use eigen::{lobpcg, LobpcgConfig, LobpcgSolver, EigenResult, GeneralizedEigenSolver, krylov_schur};
 
 #[cfg(test)]
 mod linger_integration_tests {
@@ -426,5 +575,81 @@ mod tests {
         let res = solve_fgmres_jacobi(&a, &b, &mut x, 30, &SolverConfig::default()).unwrap();
         assert!(res.converged);
         assert!(res.iterations < 60, "too many iterations: {}", res.iterations);
+    }
+
+    #[test]
+    fn idrs_laplacian() {
+        let n = 50;
+        let a = laplacian_1d(n);
+        let b = vec![1.0_f64; n];
+        let mut x = vec![0.0_f64; n];
+        let res = solve_idrs(&a, &b, &mut x, 4, &SolverConfig::default()).unwrap();
+        assert!(res.converged, "IDR(s) failed to converge");
+    }
+
+    #[test]
+    fn tfqmr_laplacian() {
+        let n = 50;
+        let a = laplacian_1d(n);
+        let b = vec![1.0_f64; n];
+        let mut x = vec![0.0_f64; n];
+        let res = solve_tfqmr(&a, &b, &mut x, &SolverConfig::default()).unwrap();
+        assert!(res.converged, "TFQMR failed to converge");
+    }
+
+    #[test]
+    fn sparse_lu_direct() {
+        let n = 20;
+        let a = laplacian_1d(n);
+        let b = vec![1.0_f64; n];
+        let x = solve_sparse_lu(&a, &b).unwrap();
+        // verify Ax ≈ b
+        let mut ax = vec![0.0_f64; n];
+        a.spmv(&x, &mut ax);
+        let err: f64 = ax.iter().zip(b.iter()).map(|(ai, bi)| (ai - bi).powi(2)).sum::<f64>().sqrt();
+        assert!(err < 1e-10, "LU residual too large: {err}");
+    }
+
+    #[test]
+    fn sparse_cholesky_direct() {
+        let n = 20;
+        let a = laplacian_1d(n);
+        let b = vec![1.0_f64; n];
+        let x = solve_sparse_cholesky(&a, &b).unwrap();
+        let mut ax = vec![0.0_f64; n];
+        a.spmv(&x, &mut ax);
+        let err: f64 = ax.iter().zip(b.iter()).map(|(ai, bi)| (ai - bi).powi(2)).sum::<f64>().sqrt();
+        assert!(err < 1e-10, "Cholesky residual too large: {err}");
+    }
+
+    #[test]
+    fn sparse_ldlt_direct() {        let n = 20;
+        let a = laplacian_1d(n);
+        let b = vec![1.0_f64; n];
+        let x = solve_sparse_ldlt(&a, &b).unwrap();
+        let mut ax = vec![0.0_f64; n];
+        a.spmv(&x, &mut ax);
+        let err: f64 = ax.iter().zip(b.iter()).map(|(ai, bi)| (ai - bi).powi(2)).sum::<f64>().sqrt();
+        assert!(err < 1e-10, "LDLt residual too large: {err}");
+    }
+
+    #[test]
+    fn pcg_ildlt_laplacian() {
+        let n = 50;
+        let a = laplacian_1d(n);
+        let b = vec![1.0_f64; n];
+        let mut x = vec![0.0_f64; n];
+        let res = solve_pcg_ildlt(&a, &b, &mut x, &SolverConfig::default()).unwrap();
+        assert!(res.converged, "PCG+ILDLt failed to converge");
+    }
+
+    #[test]
+    fn gmres_ildlt_laplacian() {
+        let n = 20;
+        let a = laplacian_1d(n);
+        let b = vec![1.0_f64; n];
+        let mut x = vec![0.0_f64; n];
+        let res = solve_gmres_ildlt(&a, &b, &mut x, 30, &SolverConfig::default()).unwrap();
+        assert!(res.converged, "GMRES+ILDLt failed to converge");
     }
 }
