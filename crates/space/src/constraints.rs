@@ -882,6 +882,7 @@ pub fn apply_periodic(
 }
 
 
+#[cfg(test)]
 mod tests {
     use super::*;
     use fem_mesh::{SimplexMesh, NCState};
