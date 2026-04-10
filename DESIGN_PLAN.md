@@ -55,6 +55,7 @@
 | 50 | solver+linalg | ✅ Done | 2026-04-09 | linger submodule update (rem-rs/linger): AMS (Auxiliary-space Maxwell Solver) for H(curl), ADS (Auxiliary-space Divergence Solver) for H(div), BlrMatrix/BlrBlock (Block Low-Rank compression); fem-solver: solve_pcg_ams, solve_gmres_ams, solve_pcg_ads, solve_gmres_ads; fem-linalg: re-export BlrMatrix, BlrBlock, compress_block, compress_block_adaptive under "direct" feature; reed submodule URL updated to rem-rs/reed |
 | 51 | space+assembly | ✅ Done | 2026-04-10 | HCurlSpace 3D ND2 topology corrected to shared face DOFs (global count = 2*n_edges + 2*n_faces) with canonical face-moment interpolation; DiscreteLinearOperator::curl_3d extended to ND2->RT1 local reconstruction; strict high-order de Rham property div(curl)=0 restored and verified; new HCurl 3D ND2 and discrete_op tests added |
 | 52 | space+assembly | ✅ Done | 2026-04-10 | L2Space extended to discontinuous P2 (Tri: 6 DOFs/elem, Tet: 10 DOFs/elem); DiscreteLinearOperator extended to ND2->L2(P2) and RT1->L2(P2) in 2D/3D; added dimension + commuting + de Rham tests including 3D RT1->L2(P2) and div(curl)=0 with L2(P2) |
+| 53 | vendor | ✅ Done | 2026-04-10 | reed submodule synchronized with upstream main: fixed `basis_h1_simplex` backend dispatch to lock backend (`Arc<Mutex<...>>`) before method call; published in rem-rs/reed and bumped fem-rs submodule pointer to commit `e9772a3` |
 
 ### Week-1 High-Order Discrete-Operator Coverage (Phase 53 kickoff)
 
