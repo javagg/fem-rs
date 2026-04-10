@@ -216,9 +216,15 @@ impl DiscreteLinearOperator {
     /// Build the discrete curl matrix C: H(curl) -> H(div) in 3D (tetrahedra).
     ///
     /// For lowest-order (ND1 -> RT0), the discrete curl is the topological
-    /// incidence matrix between edges and faces. For each face, we sum the
-    /// edge DOFs around its boundary with signs determined by the global
-    /// face orientation.
+    /// face-edge incidence matrix. Each face is processed once; the Stokes
+    /// signs are derived from the sorted global vertex order of the face,
+    /// which matches the global face-normal convention used by HDivSpace.
+    ///
+    /// For a face with sorted global vertices (a < b < c):
+    ///   - boundary traversal (right-hand rule): a → b → c → a
+    ///   - C[face, edge(a,b)] = +1
+    ///   - C[face, edge(b,c)] = +1
+    ///   - C[face, edge(a,c)] = −1  (traversal goes c→a, opposite to global a→c)
     ///
     /// # Panics
     /// Panics if spaces are not lowest-order (ND1 and RT0) on a 3D mesh.
@@ -237,48 +243,54 @@ impl DiscreteLinearOperator {
 
         let mut coo = CooMatrix::<f64>::new(n_hdiv, n_hcurl);
 
-        // Build curl operator using Stokes theorem.
-        // For each face, the curl integrates to the sum of edge integrals
-        // around the face boundary.
-        //
-        // The key is that for de Rham exactness (div(curl(u)) = 0), we need
-        // the discrete curl to be the topological incidence matrix between
-        // edges and faces.
-        //
-        // For each element, we use the local face index to look up the
-        // precomputed Stokes signs. The face_sign from hdiv_space handles
-        // the orientation difference between elements sharing a face.
+        // Local face / edge tables matching HDivSpace / HCurlSpace.
+        let tet_faces: [(usize, usize, usize); 4] = [
+            (1, 2, 3), (0, 2, 3), (0, 1, 3), (0, 1, 2),
+        ];
+        let tet_edges: [(usize, usize); 6] = [
+            (0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3),
+        ];
+
+        // Track visited face DOFs so each face is assembled exactly once.
+        let mut visited = HashSet::with_capacity(n_hdiv);
+
         for e in mesh.elem_iter() {
+            let verts = mesh.element_nodes(e);
             let hcurl_dofs = hcurl_space.element_dofs(e);
-            let hcurl_signs = hcurl_space.element_signs(e);
             let hdiv_dofs = hdiv_space.element_dofs(e);
-            let hdiv_signs = hdiv_space.element_signs(e);
 
-            for (face_local, &face_dof) in hdiv_dofs.iter().enumerate() {
-                let face_sign = hdiv_signs[face_local];
-                let face_dof = face_dof as usize;
+            for (face_local, &(la, lb, lc)) in tet_faces.iter().enumerate() {
+                let face_dof = hdiv_dofs[face_local] as usize;
 
-                // Get the Stokes signs for this face's boundary edges.
-                // This gives us (local_edge_idx, stokes_sign) for each of the 3 edges.
-                let edge_stokes = compute_stokes_signs_for_face(face_local);
+                if !visited.insert(face_dof) {
+                    continue;
+                }
 
-                for (local_edge_idx, stokes_sign) in edge_stokes {
-                    let edge_dof = hcurl_dofs[local_edge_idx] as usize;
-                    let edge_sign = hcurl_signs[local_edge_idx];
+                // Global vertices of this face, sorted → canonical orientation.
+                let mut fv = [verts[la], verts[lb], verts[lc]];
+                fv.sort_unstable();
 
-                    // The final sign is the product of:
-                    // - stokes_sign: orientation of edge in face boundary traversal
-                    // - edge_sign: orientation of DOF relative to global edge
-                    // - face_sign: orientation of face normal (already in stokes_sign for outward faces)
-                    //
-                    // For de Rham exactness, we need D*C = 0, which requires that
-                    // for each element, the sum over faces of face_sign * C[face, edge] = 0.
-                    // This is satisfied if C uses the correct topological incidence.
-                    let combined_sign = face_sign * stokes_sign * edge_sign;
-                    coo.add(face_dof, edge_dof, combined_sign);
+                // Boundary traversal fv[0]→fv[1]→fv[2]→fv[0] (right-hand rule
+                // with the global face normal (p1−p0)×(p2−p0)).
+                let face_boundary: [(u32, u32, f64); 3] = [
+                    (fv[0], fv[1],  1.0),
+                    (fv[1], fv[2],  1.0),
+                    (fv[0], fv[2], -1.0),
+                ];
+
+                for (gv0, gv1, stokes_sign) in face_boundary {
+                    // Find the local edge index whose global vertices match.
+                    let edge_idx = tet_edges.iter().position(|&(li, lj)| {
+                        let (gi, gj) = (verts[li], verts[lj]);
+                        (gi == gv0 && gj == gv1) || (gi == gv1 && gj == gv0)
+                    }).expect("face boundary edge not found in element");
+
+                    let edge_dof = hcurl_dofs[edge_idx] as usize;
+                    coo.add(face_dof, edge_dof, stokes_sign);
                 }
             }
         }
+
         coo.into_csr()
     }
 }
@@ -288,134 +300,7 @@ fn simplex_det<M: MeshTopology>(mesh: &M, geo_nodes: &[u32]) -> f64 {
     ElementTransformation::from_simplex_nodes(mesh, geo_nodes).det_j()
 }
 
-// ─── curl_3d helper tables ───────────────────────────────────────────────────
 
-/// Local face definitions for tetrahedra (matches HDivSpace TET_FACES).
-const TET_FACES: [(usize, usize, usize); 4] = [
-    (1, 2, 3), // opposite v0
-    (0, 2, 3), // opposite v1
-    (0, 1, 3), // opposite v2
-    (0, 1, 2), // opposite v3
-];
-
-/// Local edge definitions for tetrahedra (matches HCurlSpace TET_EDGES).
-const TET_EDGES: [(usize, usize); 6] = [
-    (0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3),
-];
-//
-// For each face we list the 3 boundary edges in order (a→b, b→c, c→a) with
-// the Stokes incidence sign +1 if the global edge orientation (min→max) agrees
-// with the boundary traversal direction.
-//
-/// Map local edge (i,j) to local edge index 0-5.
-const fn local_edge_to_idx(i: usize, j: usize) -> usize {
-    match (i, j) {
-        (0, 1) | (1, 0) => 0,
-        (0, 2) | (2, 0) => 1,
-        (0, 3) | (3, 0) => 2,
-        (1, 2) | (2, 1) => 3,
-        (1, 3) | (3, 1) => 4,
-        (2, 3) | (3, 2) => 5,
-        _ => panic!("invalid local edge"),
-    }
-}
-
-/// Compute Stokes signs for a face with vertices (va, vb, vc) (local indices 0-3).
-///
-/// The face orientation is determined by the local vertex order in TET_FACES.
-/// For the de Rham complex to work, all elements sharing a face must compute
-/// the same signs. We achieve this by using the local vertex order (which is
-/// consistent across elements for the same face).
-///
-/// The boundary traversal uses the right-hand rule with the normal pointing
-/// OUTWARD from the tetrahedron. For tet face opposite vertex k, the outward
-/// normal points away from vertex k.
-///
-/// Returns (local_edge_idx, stokes_sign) for each of the 3 edges.
-fn compute_stokes_signs_for_face(face_idx: usize) -> [(usize, f64); 3] {
-    // TET_FACES: [(1,2,3), (0,2,3), (0,1,3), (0,1,2)]
-    // Face k is opposite vertex k.
-    //
-    // For outward normal, we use right-hand rule. For face (va,vb,vc):
-    // - If normal points OUT: traversal is va→vb→vc→va
-    // - If normal points IN: traversal is va→vc→vb→va
-    //
-    // The normal from cross(vb-va, vc-va) points:
-    // - Face 0 (1,2,3): away from v0 → OUT
-    // - Face 1 (0,2,3): toward v1 → IN
-    // - Face 2 (0,1,3): away from v2 → OUT
-    // - Face 3 (0,1,2): toward v3 → IN
-    //
-    // stokes_sign = +1 if traversal direction matches global edge orientation
-    //             = -1 otherwise
-    // Global edge orientation: from smaller to larger global vertex index.
-    //
-    // NOTE: We use local vertex indices here because:
-    // 1. The local-to-global vertex mapping is the same for all elements sharing a face
-    // 2. The global edge orientation depends on global vertex indices
-    // 3. But for shared faces, the relative orientation is consistent
-    //
-    // Actually, this is tricky. The global edge orientation (min→max) depends on
-    // global vertex indices. Two elements sharing a face have the same global
-    // vertices, so the global edge orientation is the same.
-    //
-    // But the local edge index (0-5) depends on which local vertices form the edge.
-    // For face (va,vb,vc) in local indices, the edges are:
-    // - (va,vb) -> local edge idx
-    // - (vb,vc) -> local edge idx
-    // - (vc,va) -> local edge idx
-    //
-    // And the Stokes sign depends on whether the traversal matches global orientation.
-    //
-    // Let me precompute for each face using the fact that:
-    // - TET_FACES gives local vertices for each face
-    // - TET_EDGES gives local vertices for each edge
-    // - Global vertex indices determine edge orientation
-    //
-    // For now, use hardcoded values computed for a reference tet with verts 0,1,2,3
-    // where global edge orientation is min->max.
-    //
-    // Face 0: verts (1,2,3), edges (1,2),(2,3),(3,1) = local edges 3,5,4
-    //   traversal 1→2→3→1, global orients: 1<2 ✓(+1), 2<3 ✓(+1), 1<3 so 3→1 is against (-1)
-    // Face 1: verts (0,2,3), edges (0,2),(2,3),(3,0) = local edges 1,5,2
-    //   normal points IN, so traversal 0→3→2→0
-    //   global orients: 0<3 so 3→0 is against (-1), 2<3 so 3→2 is against (-1), 0<2 so 2→0 is against (-1)
-    //   Wait, that's wrong. Let me recalculate.
-    //
-    // Actually, the issue is that without global vertex indices, I can't compute
-    // the global edge orientation. The local edge (0,1) has global orientation
-    // min(g0,g1)->max(g0,g1), which depends on the actual global vertex indices.
-    //
-    // The key insight is that the discrete curl C[face, edge] is a TOPOLOGICAL
-    // operator that should be the same for all elements sharing a face. It should
-    // be computed from the face's global vertex ordering, not element-local.
-    //
-    // Let me use a different approach: compute signs from global face key.
-    // But we don't have access to a global face map here.
-    //
-    // Simplest approach: use the original FACE_EDGE_INCIDENCE which was derived
-    // correctly for the reference tet, but realize that it gives signs relative
-    // to local edge indices. The signs are correct for each element's local
-    // coordinate system. The de Rham property should work because:
-    // - D sums over faces of element with face_sign
-    // - C maps edges to faces with stokes_sign (from local table)
-    // - For each element, the sum over faces of face_sign * stokes_sign = 0
-    //   for each edge (because the two faces containing the edge have opposite
-    //   face_signs and the stokes signs are computed consistently).
-    //
-    // The problem was that I was using FACE_EDGE_INCIDENCE[face_local] where
-    // face_local differs for shared faces. But actually, for a given element,
-    // the local face index IS correct for that element's geometry.
-    //
-    // Let me just use the original table.
-    match face_idx {
-        0 => [(3, 1.0), (5, 1.0), (4, -1.0)],   // face 0: v1v2v3
-        1 => [(2, 1.0), (5, -1.0), (1, -1.0)],  // face 1: v0v2v3 (INWARD normal)
-        2 => [(0, 1.0), (4, 1.0), (2, -1.0)],   // face 2: v0v1v3
-        3 => [(1, 1.0), (3, -1.0), (0, -1.0)],  // face 3: v0v1v2 (INWARD normal)
-        _ => panic!("invalid face index"),
-    }
-}
 
 // ---- Tests -----------------------------------------------------------------
 
@@ -591,7 +476,6 @@ mod tests {
 
     /// Test: de Rham exact sequence in 3D — div(curl(u)) = 0.
     #[test]
-    #[ignore] // TODO: curl_3d implementation incomplete (de Rham exactness not achieved)
     fn de_rham_div_of_curl_3d_is_zero() {
         let mesh  = SimplexMesh::<3>::unit_cube_tet(2);
         let mesh2 = SimplexMesh::<3>::unit_cube_tet(2);
