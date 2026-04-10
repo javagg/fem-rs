@@ -20,8 +20,9 @@
 use std::collections::HashMap;
 
 use fem_core::types::DofId;
+use fem_element::{TetRT1, TriRT1, VectorReferenceElement};
 use fem_linalg::Vector;
-use fem_mesh::topology::MeshTopology;
+use fem_mesh::{topology::MeshTopology, ElementTransformation};
 
 use crate::dof_manager::{EdgeKey, FaceKey};
 use crate::fe_space::{FESpace, SpaceType};
@@ -292,49 +293,219 @@ impl<M: MeshTopology> HDivSpace<M> {
 
     /// Vector-valued interpolation via the RT DOF functional.
     ///
-    /// For RT0, `DOF_f(F) = F(centroid_f) · n_f · |f|` where `n_f` is the
-    /// outward unit normal and `|f|` is the face measure.  For the global DOF
-    /// value we use the global orientation.
+    /// ## RT0 (order 0)
+    /// `DOF_f(F) = ∫_f F · n̂_global ds`, approximated with the midpoint rule
+    /// (exact for constant fields; sufficient for P0 RT0).
+    ///
+    /// ## RT1 (order 1, 2D only)
+    /// Each edge has two DOFs:
+    /// - `DOF_0 = ∫₀¹ F(γ(t)) · n_global dt`  (zero-th normal moment)
+    /// - `DOF_1 = ∫₀¹ F(γ(t)) · n_global · t dt`  (first normal moment)
+    ///
+    /// where `γ(t)` parametrises the edge from endpoint a to b, and
+    /// `n_global` is the unnormalized global edge normal (length = edge length).
+    ///
+    /// Interior (bubble) DOFs:
+    /// - `DOF_6 = ∫_T F_x dA`  and  `DOF_7 = ∫_T F_y dA`
+    ///
+    /// Computed via 3-point Gauss-Legendre on each edge and a degree-3
+    /// triangle quadrature rule for the interior, giving exact results for
+    /// all fields representable in RT1.
     pub fn interpolate_vector(&self, f: &dyn Fn(&[f64]) -> Vec<f64>) -> Vector<f64> {
         let mut result = Vector::zeros(self.n_dofs);
         match &self.face_map {
             FaceDofMap::Edges(map) => {
-                // 2-D: faces are edges
-                for (&EdgeKey(a, b), &dof) in map {
-                    let pa = self.mesh.node_coords(a);
-                    let pb = self.mesh.node_coords(b);
-                    let mid = [0.5 * (pa[0] + pb[0]), 0.5 * (pa[1] + pb[1])];
-                    // Global edge tangent a→b (a < b), normal = 90° CCW rotation
-                    let tx = pb[0] - pa[0];
-                    let ty = pb[1] - pa[1];
-                    let normal = [-ty, tx]; // length = edge length
-                    let fval = f(&mid);
-                    let dot = fval[0] * normal[0] + fval[1] * normal[1];
-                    result.as_slice_mut()[dof as usize] = dot;
+                if self.order == 0 {
+                    // RT0: 1 DOF per edge — zero-th normal moment via midpoint rule.
+                    for (&EdgeKey(a, b), &dof) in map {
+                        let pa = self.mesh.node_coords(a);
+                        let pb = self.mesh.node_coords(b);
+                        let mid = [0.5 * (pa[0] + pb[0]), 0.5 * (pa[1] + pb[1])];
+                        // Global edge tangent a→b (a < b), normal = 90° CCW rotation.
+                        let tx = pb[0] - pa[0];
+                        let ty = pb[1] - pa[1];
+                        let normal = [-ty, tx]; // length = edge length
+                        let fval = f(&mid);
+                        result.as_slice_mut()[dof as usize] =
+                            fval[0] * normal[0] + fval[1] * normal[1];
+                    }
+                } else {
+                    // RT1: 2 DOFs per edge + 2 interior bubble DOFs per element.
+                    // Step 1 — edge DOFs (iterated via the unique-edge map).
+                    // 3-point Gauss-Legendre on [0,1] (exact for polynomials ≤ degree 5).
+                    let sq_3_5: f64 = (3.0_f64 / 5.0).sqrt();
+                    let gl_pts = [0.5 * (1.0 - sq_3_5), 0.5, 0.5 * (1.0 + sq_3_5)];
+                    let gl_wts = [5.0_f64 / 18.0, 4.0 / 9.0, 5.0 / 18.0];
+
+                    for (&EdgeKey(a, b), &first_dof) in map {
+                        let pa = self.mesh.node_coords(a);
+                        let pb = self.mesh.node_coords(b);
+                        // Global normal (unnormalized, len = edge length).
+                        let tx = pb[0] - pa[0];
+                        let ty = pb[1] - pa[1];
+                        let normal = [-ty, tx];
+
+                        let mut mom0 = 0.0_f64;
+                        let mut mom1 = 0.0_f64;
+                        for k in 0..3 {
+                            let t = gl_pts[k];
+                            let w = gl_wts[k];
+                            let pt = [pa[0] + t * tx, pa[1] + t * ty];
+                            let fval = f(&pt);
+                            let flux = fval[0] * normal[0] + fval[1] * normal[1];
+                            mom0 += w * flux;
+                            mom1 += w * flux * t;
+                        }
+                        let r = result.as_slice_mut();
+                        r[first_dof as usize]     = mom0;
+                        r[first_dof as usize + 1] = mom1;
+                    }
+
+                    // Step 2 — interior bubble DOFs (element-local, not in edge map).
+                    // Use a degree-3 triangle quadrature rule.
+                    let qr = TriRT1.quadrature(4);
+                    let n_elem = self.mesh.n_elements();
+                    for e in 0..n_elem as u32 {
+                        let dofs  = self.element_dofs(e);
+                        let nodes = self.mesh.element_nodes(e);
+                        let transform = ElementTransformation::from_simplex_nodes(&self.mesh, nodes);
+                        let det_j = transform.det_j().abs();
+
+                        let bub0 = dofs[6] as usize;
+                        let bub1 = dofs[7] as usize;
+
+                        // x_phys = x0 + J * xi
+                        let x0 = self.mesh.node_coords(nodes[0]);
+                        let x1 = self.mesh.node_coords(nodes[1]);
+                        let x2 = self.mesh.node_coords(nodes[2]);
+                        let j00 = x1[0] - x0[0]; let j10 = x1[1] - x0[1];
+                        let j01 = x2[0] - x0[0]; let j11 = x2[1] - x0[1];
+
+                        let mut int_x = 0.0_f64;
+                        let mut int_y = 0.0_f64;
+                        for (xi, &w) in qr.points.iter().zip(qr.weights.iter()) {
+                            let xp = [x0[0] + j00 * xi[0] + j01 * xi[1],
+                                      x0[1] + j10 * xi[0] + j11 * xi[1]];
+                            let fval = f(&xp);
+                            int_x += w * fval[0];
+                            int_y += w * fval[1];
+                        }
+                        let r = result.as_slice_mut();
+                        r[bub0] = int_x * det_j;
+                        r[bub1] = int_y * det_j;
+                    }
                 }
             }
             FaceDofMap::Faces(map) => {
-                // 3-D: faces are triangles
-                for (&FaceKey(a, b, c), &dof) in map {
-                    let pa = self.mesh.node_coords(a);
-                    let pb = self.mesh.node_coords(b);
-                    let pc = self.mesh.node_coords(c);
-                    let centroid = [
-                        (pa[0] + pb[0] + pc[0]) / 3.0,
-                        (pa[1] + pb[1] + pc[1]) / 3.0,
-                        (pa[2] + pb[2] + pc[2]) / 3.0,
-                    ];
-                    // Global face normal = (pb−pa) × (pc−pa)  (length = 2 × area)
-                    let e1 = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]];
-                    let e2 = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]];
-                    let normal = [
-                        e1[1] * e2[2] - e1[2] * e2[1],
-                        e1[2] * e2[0] - e1[0] * e2[2],
-                        e1[0] * e2[1] - e1[1] * e2[0],
-                    ];
-                    let fval = f(&centroid);
-                    let dot = fval[0] * normal[0] + fval[1] * normal[1] + fval[2] * normal[2];
-                    result.as_slice_mut()[dof as usize] = dot;
+                if self.order == 0 {
+                    // 3-D RT0: one flux DOF per face (midpoint rule).
+                    for (&FaceKey(a, b, c), &dof) in map {
+                        let pa = self.mesh.node_coords(a);
+                        let pb = self.mesh.node_coords(b);
+                        let pc = self.mesh.node_coords(c);
+                        let centroid = [
+                            (pa[0] + pb[0] + pc[0]) / 3.0,
+                            (pa[1] + pb[1] + pc[1]) / 3.0,
+                            (pa[2] + pb[2] + pc[2]) / 3.0,
+                        ];
+                        // Global face normal = (pb−pa) × (pc−pa)  (length = 2 × area)
+                        let e1 = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]];
+                        let e2 = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]];
+                        let normal = [
+                            e1[1] * e2[2] - e1[2] * e2[1],
+                            e1[2] * e2[0] - e1[0] * e2[2],
+                            e1[0] * e2[1] - e1[1] * e2[0],
+                        ];
+                        let fval = f(&centroid);
+                        let dot = fval[0] * normal[0] + fval[1] * normal[1] + fval[2] * normal[2];
+                        result.as_slice_mut()[dof as usize] = dot;
+                    }
+                } else {
+                    // 3-D RT1: 3 face moments per global face + 3 interior moments per element.
+
+                    // Step 1 — face moments, assembled once per unique global face.
+                    let qr_face = TriRT1.quadrature(4);
+                    for (&FaceKey(a, b, c), &first_dof) in map {
+                        let pa = self.mesh.node_coords(a);
+                        let pb = self.mesh.node_coords(b);
+                        let pc = self.mesh.node_coords(c);
+
+                        let ds = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]];
+                        let dt = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]];
+                        let cross = [
+                            ds[1] * dt[2] - ds[2] * dt[1],
+                            ds[2] * dt[0] - ds[0] * dt[2],
+                            ds[0] * dt[1] - ds[1] * dt[0],
+                        ];
+                        let jac_area = (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
+                        let n_unit = [cross[0] / jac_area, cross[1] / jac_area, cross[2] / jac_area];
+
+                        let mut m0 = 0.0_f64;
+                        let mut m1 = 0.0_f64;
+                        let mut m2 = 0.0_f64;
+                        for (xi, &w) in qr_face.points.iter().zip(qr_face.weights.iter()) {
+                            let s = xi[0];
+                            let t = xi[1];
+                            let pt = [
+                                pa[0] + s * ds[0] + t * dt[0],
+                                pa[1] + s * ds[1] + t * dt[1],
+                                pa[2] + s * ds[2] + t * dt[2],
+                            ];
+                            let fv = f(&pt);
+                            let nflux = fv[0] * n_unit[0] + fv[1] * n_unit[1] + fv[2] * n_unit[2];
+                            let d_sigma = w * jac_area;
+                            m0 += d_sigma * nflux;
+                            m1 += d_sigma * nflux * s;
+                            m2 += d_sigma * nflux * t;
+                        }
+
+                        let r = result.as_slice_mut();
+                        r[first_dof as usize] = m0;
+                        r[first_dof as usize + 1] = m1;
+                        r[first_dof as usize + 2] = m2;
+                    }
+
+                    // Step 2 — element-local interior moments (last 3 local DOFs).
+                    let qr_vol = TetRT1.quadrature(4);
+                    let n_elem = self.mesh.n_elements();
+                    for e in 0..n_elem as u32 {
+                        let dofs = self.element_dofs(e);
+                        let nodes = self.mesh.element_nodes(e);
+                        let transform = ElementTransformation::from_simplex_nodes(&self.mesh, nodes);
+                        let det_j = transform.det_j().abs();
+
+                        let b0 = dofs[dofs.len() - 3] as usize;
+                        let b1 = dofs[dofs.len() - 2] as usize;
+                        let b2 = dofs[dofs.len() - 1] as usize;
+
+                        let x0 = self.mesh.node_coords(nodes[0]);
+                        let x1 = self.mesh.node_coords(nodes[1]);
+                        let x2 = self.mesh.node_coords(nodes[2]);
+                        let x3 = self.mesh.node_coords(nodes[3]);
+                        let j0 = [x1[0] - x0[0], x1[1] - x0[1], x1[2] - x0[2]];
+                        let j1 = [x2[0] - x0[0], x2[1] - x0[1], x2[2] - x0[2]];
+                        let j2 = [x3[0] - x0[0], x3[1] - x0[1], x3[2] - x0[2]];
+
+                        let mut int_x = 0.0_f64;
+                        let mut int_y = 0.0_f64;
+                        let mut int_z = 0.0_f64;
+                        for (xi, &w) in qr_vol.points.iter().zip(qr_vol.weights.iter()) {
+                            let pt = [
+                                x0[0] + j0[0] * xi[0] + j1[0] * xi[1] + j2[0] * xi[2],
+                                x0[1] + j0[1] * xi[0] + j1[1] * xi[1] + j2[1] * xi[2],
+                                x0[2] + j0[2] * xi[0] + j1[2] * xi[1] + j2[2] * xi[2],
+                            ];
+                            let fv = f(&pt);
+                            int_x += w * fv[0];
+                            int_y += w * fv[1];
+                            int_z += w * fv[2];
+                        }
+
+                        let r = result.as_slice_mut();
+                        r[b0] = int_x * det_j;
+                        r[b1] = int_y * det_j;
+                        r[b2] = int_z * det_j;
+                    }
                 }
             }
         }
@@ -455,5 +626,43 @@ mod tests {
         for &val in v.as_slice() {
             assert!(val.is_finite(), "interpolated value should be finite");
         }
+    }
+
+    #[test]
+    fn hdiv_interpolate_vector_constant_3d_rt1_moments() {
+        let mesh = SimplexMesh::<3>::unit_cube_tet(1);
+        let space = HDivSpace::new(mesh, 1);
+
+        // Constant field F = (1,0,0).
+        let v = space.interpolate_vector(&|_x| vec![1.0, 0.0, 0.0]);
+        let vals = v.as_slice();
+        assert!(vals.iter().all(|x| x.is_finite()));
+
+        // One tetrahedron: 12 face DOFs + 3 interior DOFs.
+        let ldofs = space.element_dofs(0);
+        assert_eq!(ldofs.len(), 15);
+
+        // For constant face flux, moments against s and t are exactly 1/3 of the zeroth moment.
+        for face in 0..4usize {
+            let i0 = ldofs[3 * face] as usize;
+            let i1 = ldofs[3 * face + 1] as usize;
+            let i2 = ldofs[3 * face + 2] as usize;
+            let m0 = vals[i0];
+            let m1 = vals[i1];
+            let m2 = vals[i2];
+            if m0.abs() > 1e-12 {
+                assert!((m1 / m0 - 1.0 / 3.0).abs() < 1e-8, "face moment-1 ratio mismatch");
+                assert!((m2 / m0 - 1.0 / 3.0).abs() < 1e-8, "face moment-2 ratio mismatch");
+            }
+        }
+
+        // Interior moments are integrals of components over K.
+        let b0 = ldofs[12] as usize;
+        let b1 = ldofs[13] as usize;
+        let b2 = ldofs[14] as usize;
+        let expected_vol = 1.0 / 6.0; // reference tetra volume in this mesh
+        assert!((vals[b0] - expected_vol).abs() < 1e-8, "wrong x interior moment");
+        assert!(vals[b1].abs() < 1e-10, "y interior moment should be zero");
+        assert!(vals[b2].abs() < 1e-10, "z interior moment should be zero");
     }
 }

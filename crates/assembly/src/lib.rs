@@ -44,7 +44,7 @@ pub mod postprocess;
 pub mod discrete_op;
 
 pub use assembler::{Assembler, face_dofs_p1, face_dofs_p2};
-pub use discrete_op::DiscreteLinearOperator;
+pub use discrete_op::{DiscreteLinearOperator, DiscreteOpError};
 pub use integrator::{
     BdQpData, BilinearIntegrator, BoundaryBilinearIntegrator, BoundaryLinearIntegrator,
     LinearIntegrator, QpData,

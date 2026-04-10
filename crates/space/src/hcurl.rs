@@ -20,8 +20,9 @@
 use std::collections::HashMap;
 
 use fem_core::types::DofId;
+use fem_element::{TriND2, VectorReferenceElement};
 use fem_linalg::Vector;
-use fem_mesh::topology::MeshTopology;
+use fem_mesh::{topology::MeshTopology, ElementTransformation};
 
 use crate::dof_manager::EdgeKey;
 use crate::fe_space::{FESpace, SpaceType};
@@ -158,21 +159,101 @@ impl<M: MeshTopology> HCurlSpace<M> {
 
     /// Vector-valued interpolation via the Nédélec DOF functional.
     ///
-    /// For ND1, `DOF_e(F) = F(midpoint_e) · tangent_e` where `tangent_e` is
+    /// ## ND1 (order 1)
+    /// `DOF_e(F) = F(midpoint_e) · tangent_e` where `tangent_e` is
     /// the edge vector in global orientation (from smaller to larger vertex).
-    /// This is exact for affine vector fields.
+    /// Exact for affine vector fields.
+    ///
+    /// ## ND2 (order 2, 2D only)
+    /// Each edge contributes two DOFs:
+    /// - `DOF_0 = ∫₀¹ F(γ(t)) · τ dt`   (zero-th tangential moment)
+    /// - `DOF_1 = ∫₀¹ F(γ(t)) · τ · t dt`  (first tangential moment)
+    ///
+    /// where `γ(t)` parametrises the edge a→b (a < b in global orientation)
+    /// and `τ = b − a` is the global edge tangent vector.
+    ///
+    /// Interior (bubble) DOFs:
+    /// - `DOF_6 = ∫_T F_x dA`  and  `DOF_7 = ∫_T F_y dA`
+    ///
+    /// Computed via 3-point Gauss-Legendre on each edge and a degree-4
+    /// triangle quadrature for the interior.
     pub fn interpolate_vector(&self, f: &dyn Fn(&[f64]) -> Vec<f64>) -> Vector<f64> {
         let mut result = Vector::zeros(self.n_dofs);
-        for (&EdgeKey(a, b), &dof) in &self.edge_to_dof {
-            let pa = self.mesh.node_coords(a);
-            let pb = self.mesh.node_coords(b);
-            // Midpoint
-            let mid: Vec<f64> = (0..self.dim).map(|d| 0.5 * (pa[d] + pb[d])).collect();
-            // Tangent vector (global orientation: a→b, where a < b)
-            let tangent: Vec<f64> = (0..self.dim).map(|d| pb[d] - pa[d]).collect();
-            let fval = f(&mid);
-            let dot: f64 = fval.iter().zip(&tangent).map(|(fi, ti)| fi * ti).sum();
-            result.as_slice_mut()[dof as usize] = dot;
+
+        if self.order == 1 {
+            // ND1: one zero-th tangential moment per edge, midpoint-evaluated.
+            for (&EdgeKey(a, b), &dof) in &self.edge_to_dof {
+                let pa = self.mesh.node_coords(a);
+                let pb = self.mesh.node_coords(b);
+                let mid: Vec<f64> = (0..self.dim).map(|d| 0.5 * (pa[d] + pb[d])).collect();
+                let tangent: Vec<f64> = (0..self.dim).map(|d| pb[d] - pa[d]).collect();
+                let fval = f(&mid);
+                let dot: f64 = fval.iter().zip(&tangent).map(|(fi, ti)| fi * ti).sum();
+                result.as_slice_mut()[dof as usize] = dot;
+            }
+        } else {
+            // ND2: two tangential moments per edge + 2 interior bubble DOFs per element.
+            // 3-point Gauss-Legendre on [0,1] (exact for polynomials ≤ degree 5).
+            let sq_3_5: f64 = (3.0_f64 / 5.0).sqrt();
+            let gl_pts = [0.5 * (1.0 - sq_3_5), 0.5, 0.5 * (1.0 + sq_3_5)];
+            let gl_wts = [5.0_f64 / 18.0, 4.0 / 9.0, 5.0 / 18.0];
+
+            // Step 1 — edge DOFs.
+            for (&EdgeKey(a, b), &first_dof) in &self.edge_to_dof {
+                let pa = self.mesh.node_coords(a);
+                let pb = self.mesh.node_coords(b);
+                // Global tangent a→b (a < b by EdgeKey convention).
+                let dim = self.dim;
+                let tangent: Vec<f64> = (0..dim).map(|d| pb[d] - pa[d]).collect();
+
+                let mut mom0 = 0.0_f64;
+                let mut mom1 = 0.0_f64;
+                for k in 0..3 {
+                    let t = gl_pts[k];
+                    let w = gl_wts[k];
+                    let pt: Vec<f64> = (0..dim).map(|d| pa[d] + t * tangent[d]).collect();
+                    let fval = f(&pt);
+                    let flux: f64 = fval.iter().zip(&tangent).map(|(fi, ti)| fi * ti).sum();
+                    mom0 += w * flux;
+                    mom1 += w * flux * t;
+                }
+                let r = result.as_slice_mut();
+                r[first_dof as usize]     = mom0;
+                r[first_dof as usize + 1] = mom1;
+            }
+
+            // Step 2 — interior bubble DOFs (element-local).
+            let qr = TriND2.quadrature(4);
+            let n_elem = self.mesh.n_elements();
+            for e in 0..n_elem as u32 {
+                let dofs  = self.element_dofs(e);
+                let nodes = self.mesh.element_nodes(e);
+                let transform = ElementTransformation::from_simplex_nodes(&self.mesh, nodes);
+                let det_j = transform.det_j().abs();
+
+                // Bubble DOFs are always the last 2 local DOFs for TriND2.
+                let bub0 = dofs[dofs.len() - 2] as usize;
+                let bub1 = dofs[dofs.len() - 1] as usize;
+
+                let x0 = self.mesh.node_coords(nodes[0]);
+                let x1 = self.mesh.node_coords(nodes[1]);
+                let x2 = self.mesh.node_coords(nodes[2]);
+                let j00 = x1[0] - x0[0]; let j10 = x1[1] - x0[1];
+                let j01 = x2[0] - x0[0]; let j11 = x2[1] - x0[1];
+
+                let mut int_x = 0.0_f64;
+                let mut int_y = 0.0_f64;
+                for (xi, &w) in qr.points.iter().zip(qr.weights.iter()) {
+                    let xp = [x0[0] + j00 * xi[0] + j01 * xi[1],
+                              x0[1] + j10 * xi[0] + j11 * xi[1]];
+                    let fval = f(&xp);
+                    int_x += w * fval[0];
+                    int_y += w * fval[1];
+                }
+                let r = result.as_slice_mut();
+                r[bub0] = int_x * det_j;
+                r[bub1] = int_y * det_j;
+            }
         }
         result
     }

@@ -431,6 +431,7 @@ dependencies = [
  "fem-space",
  "nalgebra 0.33.3",
  "rayon",
+ "thiserror",
 ]
 
 [[package]]
