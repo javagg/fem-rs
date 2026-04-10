@@ -5,6 +5,7 @@
 //! ## Iterative solvers
 //! - [`solve_cg`]          — Conjugate Gradient (SPD systems)
 //! - [`solve_cg_operator`] — Conjugate Gradient with operator callback (backend-agnostic)
+//! - [`solve_gmres_operator`] — GMRES with operator callback (backend-agnostic)
 //! - [`solve_pcg_jacobi`]  — PCG with Jacobi preconditioner
 //! - [`solve_pcg_ilu0`]    — PCG with ILU(0) preconditioner
 //! - [`solve_pcg_ildlt`]   — PCG with ILDLᵀ preconditioner
@@ -333,6 +334,189 @@ pub fn solve_gmres<T: LingerScalar>(
         .map_err(SolverError::from)?;
     x.copy_from_slice(lx.as_slice());
     Ok(into_result(res))
+}
+
+/// GMRES using a backend-agnostic operator callback.
+///
+/// This entrypoint is intended for matrix-free or foreign-backend operators
+/// that can provide `y = A*x` without exposing a concrete CSR matrix.
+pub fn solve_gmres_operator<F>(
+    nrows: usize,
+    ncols: usize,
+    apply: F,
+    b: &[f64],
+    x: &mut [f64],
+    restart: usize,
+    cfg: &SolverConfig,
+) -> Result<SolveResult, SolverError>
+where
+    F: Fn(&[f64], &mut [f64]),
+{
+    if nrows != ncols || b.len() != nrows || x.len() != ncols {
+        return Err(SolverError::DimensionMismatch {
+            rows: nrows,
+            cols: ncols,
+            rhs: b.len(),
+        });
+    }
+    if restart == 0 {
+        return Err(SolverError::Linger("GMRES restart must be > 0".to_string()));
+    }
+
+    fn dot(a: &[f64], b: &[f64]) -> f64 {
+        a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+    }
+    fn norm(v: &[f64]) -> f64 {
+        dot(v, v).sqrt()
+    }
+
+    let n = nrows;
+    let mut iter_total = 0usize;
+
+    let mut ax = vec![0.0; n];
+    apply(x, &mut ax);
+    let mut r = vec![0.0; n];
+    for i in 0..n {
+        r[i] = b[i] - ax[i];
+    }
+
+    let norm_b = norm(b);
+    let tol = cfg.atol.max(cfg.rtol * norm_b.max(1e-32));
+    let mut res_norm = norm(&r);
+    if res_norm <= tol {
+        return Ok(SolveResult {
+            converged: true,
+            iterations: 0,
+            final_residual: res_norm,
+        });
+    }
+
+    while iter_total < cfg.max_iter {
+        let beta = norm(&r);
+        if beta <= tol {
+            return Ok(SolveResult {
+                converged: true,
+                iterations: iter_total,
+                final_residual: beta,
+            });
+        }
+
+        let mut v = vec![vec![0.0; n]; restart + 1];
+        for i in 0..n {
+            v[0][i] = r[i] / beta;
+        }
+
+        let mut h = vec![vec![0.0; restart]; restart + 1];
+        let mut cs = vec![0.0; restart];
+        let mut sn = vec![0.0; restart];
+        let mut g = vec![0.0; restart + 1];
+        g[0] = beta;
+
+        let mut inner_done = 0usize;
+        let mut converged = false;
+
+        for j in 0..restart {
+            if iter_total >= cfg.max_iter {
+                break;
+            }
+
+            let mut w = vec![0.0; n];
+            apply(&v[j], &mut w);
+
+            for i in 0..=j {
+                h[i][j] = dot(&w, &v[i]);
+                for k in 0..n {
+                    w[k] -= h[i][j] * v[i][k];
+                }
+            }
+
+            h[j + 1][j] = norm(&w);
+            if h[j + 1][j] > 1e-32 {
+                for k in 0..n {
+                    v[j + 1][k] = w[k] / h[j + 1][j];
+                }
+            }
+
+            // Apply existing Givens rotations.
+            for i in 0..j {
+                let tmp = cs[i] * h[i][j] + sn[i] * h[i + 1][j];
+                h[i + 1][j] = -sn[i] * h[i][j] + cs[i] * h[i + 1][j];
+                h[i][j] = tmp;
+            }
+
+            // Build and apply new Givens rotation.
+            let denom = (h[j][j] * h[j][j] + h[j + 1][j] * h[j + 1][j]).sqrt();
+            if denom > 1e-32 {
+                cs[j] = h[j][j] / denom;
+                sn[j] = h[j + 1][j] / denom;
+            } else {
+                cs[j] = 1.0;
+                sn[j] = 0.0;
+            }
+
+            h[j][j] = cs[j] * h[j][j] + sn[j] * h[j + 1][j];
+            h[j + 1][j] = 0.0;
+
+            let g_next = -sn[j] * g[j];
+            g[j] = cs[j] * g[j];
+            g[j + 1] = g_next;
+
+            res_norm = g[j + 1].abs();
+            iter_total += 1;
+            inner_done = j + 1;
+
+            if res_norm <= tol {
+                converged = true;
+                break;
+            }
+        }
+
+        if inner_done == 0 {
+            break;
+        }
+
+        // Back-substitution: solve upper-triangular H(0..m,0..m) * y = g(0..m)
+        let m = inner_done;
+        let mut y = vec![0.0; m];
+        for i in (0..m).rev() {
+            let mut s = g[i];
+            for k in i + 1..m {
+                s -= h[i][k] * y[k];
+            }
+            let diag = h[i][i];
+            if diag.abs() < 1e-32 {
+                return Err(SolverError::Linger(
+                    "GMRES operator breakdown: near-singular Hessenberg diagonal".to_string(),
+                ));
+            }
+            y[i] = s / diag;
+        }
+
+        for i in 0..m {
+            for k in 0..n {
+                x[k] += y[i] * v[i][k];
+            }
+        }
+
+        if converged {
+            return Ok(SolveResult {
+                converged: true,
+                iterations: iter_total,
+                final_residual: res_norm,
+            });
+        }
+
+        apply(x, &mut ax);
+        for i in 0..n {
+            r[i] = b[i] - ax[i];
+        }
+        res_norm = norm(&r);
+    }
+
+    Err(SolverError::ConvergenceFailed {
+        max_iter: cfg.max_iter,
+        residual: res_norm,
+    })
 }
 
 /// BiCGSTAB — for non-symmetric systems; often faster than GMRES per iteration.
