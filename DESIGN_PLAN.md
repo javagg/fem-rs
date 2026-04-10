@@ -73,7 +73,7 @@ Week-1 checklist:
 - [x] 3D RT1 -> L2(P2) dimensions + commuting tests
 - [x] 3D ND2 -> RT1 commuting test
 - [x] Add low/high-order randomized stress tests for commuting errors
-- [ ] Add CI grouping for high-order discrete-operator suite
+- [x] Add CI grouping for high-order discrete-operator suite (`cargo test-high-order-discrete-op`)
 
 ### Vendor submodules
 | Submodule | URL | Role |

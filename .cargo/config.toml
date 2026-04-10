@@ -2,3 +2,4 @@
 wasm-build = "build --target wasm32-unknown-unknown -p wasm --no-default-features"
 check-all  = "check --workspace --all-features"
 test-all   = "test --workspace"
+test-high-order-discrete-op = "test -p fem-assembly --test high_order_discrete_op -- --nocapture"
