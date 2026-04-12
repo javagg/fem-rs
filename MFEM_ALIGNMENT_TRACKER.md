@@ -37,7 +37,9 @@
 - 🔲 HDF5/XDMF 并行 I/O 与 restart 文件链路。
 - 🔲 hypre 绑定（可选 FFI 路线）。
 - 🔲 Netgen/Abaqus 网格读取支持。
-- 🔨 `ElementTransformation` 统一抽象层（当前可用但仍以装配内联路径为主）。
+- ✅ `ElementTransformation` 统一抽象层（完成）。
+  当前进展（2026-04-12）：`assembler`、`vector_assembler`、`mixed`、`vector_boundary` 的仿射 simplex 几何路径已统一切换到 `ElementTransformation`，不再在装配入口重复内联 `J/det(J)/J^{-T}/x(ξ)` 逻辑。
+  验收证据（2026-04-12）：`cargo test -p fem-assembly --lib` 通过（118 passed, 0 failed, 1 ignored）。
 
 ---
 

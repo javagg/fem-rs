@@ -12,8 +12,7 @@ use fem_element::lagrange::{HexQ1, QuadQ1};
 use fem_element::nedelec::{HexND1, HexND2, QuadND1, QuadND2, TetND1, TetND2, TriND1, TriND2};
 use fem_element::raviart_thomas::{TriRT0, TetRT0, TriRT1, TetRT1};
 use fem_linalg::{CooMatrix, CsrMatrix};
-use fem_mesh::element_type::ElementType;
-use fem_mesh::topology::MeshTopology;
+use fem_mesh::{ElementTransformation, element_type::ElementType, topology::MeshTopology};
 use fem_space::fe_space::{FESpace, SpaceType};
 
 use crate::vector_integrator::{VectorBilinearIntegrator, VectorLinearIntegrator, VectorQpData};
@@ -54,33 +53,6 @@ fn geo_ref_elem(elem_type: ElementType) -> Option<Box<dyn ReferenceElement>> {
 }
 
 // ─── Jacobian helpers (same as assembler.rs) ────────────────────────────────
-
-fn simplex_jacobian<M: MeshTopology>(
-    mesh: &M,
-    geo_nodes: &[u32],
-    dim: usize,
-) -> (DMatrix<f64>, f64) {
-    let x0 = mesh.node_coords(geo_nodes[0]);
-    let mut j = DMatrix::<f64>::zeros(dim, dim);
-    for col in 0..dim {
-        let xc = mesh.node_coords(geo_nodes[col + 1]);
-        for row in 0..dim {
-            j[(row, col)] = xc[row] - x0[row];
-        }
-    }
-    let det = j.determinant();
-    (j, det)
-}
-
-fn phys_coords(x0: &[f64], j: &DMatrix<f64>, xi: &[f64], dim: usize) -> Vec<f64> {
-    let mut xp = x0.to_vec();
-    for i in 0..dim {
-        for k in 0..dim {
-            xp[i] += j[(i, k)] * xi[k];
-        }
-    }
-    xp
-}
 
 fn isoparametric_jacobian<M: MeshTopology>(
     mesh: &M,
@@ -269,7 +241,11 @@ impl VectorAssembler {
 
             let use_iso = matches!(elem_type, ElementType::Quad4 | ElementType::Hex8);
             let geo_elem = geo_ref_elem(elem_type);
-            let x0 = mesh.node_coords(nodes[0]);
+            let affine_tr = if use_iso {
+                None
+            } else {
+                Some(ElementTransformation::from_simplex_nodes(mesh, nodes))
+            };
 
             let mut k_elem = vec![0.0_f64; n_ldofs * n_ldofs];
 
@@ -280,9 +256,8 @@ impl VectorAssembler {
                         .expect("missing geometry reference element for isoparametric vector assembly");
                     isoparametric_jacobian(mesh, nodes, ge.as_ref(), xi, dim)
                 } else {
-                    let (j, d) = simplex_jacobian(mesh, nodes, dim);
-                    let x = phys_coords(x0, &j, xi, dim);
-                    (j, d, x)
+                    let tr = affine_tr.as_ref().unwrap();
+                    (tr.jacobian().clone(), tr.det_j(), tr.map_to_physical(xi))
                 };
                 let j_inv_t = jac
                     .clone()
@@ -381,7 +356,11 @@ impl VectorAssembler {
 
             let use_iso = matches!(elem_type, ElementType::Quad4 | ElementType::Hex8);
             let geo_elem = geo_ref_elem(elem_type);
-            let x0 = mesh.node_coords(nodes[0]);
+            let affine_tr = if use_iso {
+                None
+            } else {
+                Some(ElementTransformation::from_simplex_nodes(mesh, nodes))
+            };
 
             let mut f_elem = vec![0.0_f64; n_ldofs];
 
@@ -392,9 +371,8 @@ impl VectorAssembler {
                         .expect("missing geometry reference element for isoparametric vector assembly");
                     isoparametric_jacobian(mesh, nodes, ge.as_ref(), xi, dim)
                 } else {
-                    let (j, d) = simplex_jacobian(mesh, nodes, dim);
-                    let x = phys_coords(x0, &j, xi, dim);
-                    (j, d, x)
+                    let tr = affine_tr.as_ref().unwrap();
+                    (tr.jacobian().clone(), tr.det_j(), tr.map_to_physical(xi))
                 };
                 let j_inv_t = jac
                     .clone()

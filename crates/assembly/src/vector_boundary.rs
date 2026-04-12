@@ -42,6 +42,7 @@ use nalgebra::DMatrix;
 use fem_element::nedelec::{TetND1, TetND2, TriND1, TriND2};
 use fem_element::reference::VectorReferenceElement;
 use fem_linalg::{CooMatrix, CsrMatrix};
+use fem_mesh::ElementTransformation;
 use fem_mesh::topology::MeshTopology;
 use fem_space::fe_space::{FESpace, SpaceType};
 
@@ -229,11 +230,8 @@ impl VectorBoundaryAssembler {
             };
 
             let elem_nodes = mesh.element_nodes(owner_elem);
-            let (jac, _det_j) = simplex_jacobian(mesh, elem_nodes, dim);
-            let j_inv_t = jac.clone()
-                .try_inverse()
-                .expect("degenerate element")
-                .transpose();
+            let tr = ElementTransformation::from_simplex_nodes(mesh, elem_nodes);
+            let j_inv_t = tr.jacobian_inv_t().clone();
 
             // DOFs and signs for the owner element.
             let global_dofs: Vec<usize> = space
@@ -332,8 +330,8 @@ impl VectorBoundaryAssembler {
             };
 
             let elem_nodes = mesh.element_nodes(owner_elem);
-            let (jac, _det_j) = simplex_jacobian(mesh, elem_nodes, dim);
-            let j_inv_t = jac.clone().try_inverse().unwrap().transpose();
+            let tr = ElementTransformation::from_simplex_nodes(mesh, elem_nodes);
+            let j_inv_t = tr.jacobian_inv_t().clone();
 
             let global_dofs: Vec<usize> = space
                 .element_dofs(owner_elem)
@@ -402,23 +400,6 @@ fn vec_ref_elem_hcurl(dim: usize, order: u8) -> Box<dyn VectorReferenceElement> 
     }
 }
 
-fn simplex_jacobian<M: MeshTopology>(
-    mesh:      &M,
-    geo_nodes: &[u32],
-    dim:       usize,
-) -> (DMatrix<f64>, f64) {
-    let x0 = mesh.node_coords(geo_nodes[0]);
-    let mut j = DMatrix::<f64>::zeros(dim, dim);
-    for col in 0..dim {
-        let xc = mesh.node_coords(geo_nodes[col + 1]);
-        for row in 0..dim {
-            j[(row, col)] = xc[row] - x0[row];
-        }
-    }
-    let det = j.determinant();
-    (j, det)
-}
-
 fn piola_hcurl_basis(
     j_inv_t:  &DMatrix<f64>,
     ref_vals: &[f64],
@@ -458,12 +439,12 @@ fn phys_to_ref<M: MeshTopology>(
     xp:         &[f64],
     dim:        usize,
 ) -> Vec<f64> {
+    let tr = ElementTransformation::from_simplex_nodes(mesh, elem_nodes);
     let x0 = mesh.node_coords(elem_nodes[0]);
     let mut b = vec![0.0_f64; dim];
     for i in 0..dim { b[i] = xp[i] - x0[i]; }
 
-    let (j, _) = simplex_jacobian(mesh, elem_nodes, dim);
-    let j_inv = j.try_inverse().expect("degenerate element");
+    let j_inv = tr.jacobian().clone().try_inverse().expect("degenerate element");
 
     let mut xi = vec![0.0_f64; dim];
     for i in 0..dim {
