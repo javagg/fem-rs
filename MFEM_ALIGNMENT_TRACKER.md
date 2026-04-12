@@ -40,6 +40,9 @@
 - ✅ `ElementTransformation` 统一抽象层（完成）。
   当前进展（2026-04-12）：`assembler`、`vector_assembler`、`mixed`、`vector_boundary` 的仿射 simplex 几何路径已统一切换到 `ElementTransformation`，不再在装配入口重复内联 `J/det(J)/J^{-T}/x(ξ)` 逻辑。
   验收证据（2026-04-12）：`cargo test -p fem-assembly --lib` 通过（118 passed, 0 failed, 1 ignored）。
+- ✅ `jsmpi` 依赖来源统一为 crates.io 包（完成）。
+  当前进展（2026-04-12）：`fem-parallel` 与 `fem-wasm` 已从 `vendor/jsmpi` path/submodule 依赖切换为 registry 依赖 `jsmpi = "0.1.0"`，并移除仓库 `vendor/jsmpi` 子模块跟踪。
+  验收证据（2026-04-12）：`cargo check -p fem-parallel --target wasm32-unknown-unknown` 与 `cargo check -p fem-wasm --target wasm32-unknown-unknown --features wasm-parallel` 通过。
 
 ---
 
