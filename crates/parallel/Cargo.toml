@@ -27,6 +27,7 @@ rayon = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 jsmpi = "0.1"
 
+
 [features]
 default = []
 mpi     = ["dep:mpi"]
