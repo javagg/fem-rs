@@ -138,6 +138,14 @@ path = "pex4_parallel_heat.rs"
 name = "ex_convergence"
 path = "ex_convergence.rs"
 
+[[example]]
+name = "ex22_complex"
+path = "ex22_complex.rs"
+
+[[example]]
+name = "ex41_imex"
+path = "ex41_imex.rs"
+
 [lib]
 name = "fem_examples"
 path = "src/lib.rs"

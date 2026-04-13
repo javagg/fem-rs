@@ -722,6 +722,168 @@ prioritized roadmap for continued development.
 | Restart files | TBD | Requires HDF5 |
 | Tet4 NC AMR example | ✅ | ~~TBD~~ Done (`ex15_tet_nc_amr`, supports `--solve`) |
 
+---
+
+## MFEM v4.9 Gap Analysis (2026-04-13)
+
+> 对比基准：MFEM v4.9（2025-12-11）— 最新版本。
+> 以下差距按优先级排列，高优先级直接影响物理覆盖面，低优先级是工程完善项。
+
+### 差距汇总表
+
+| 能力领域 | MFEM v4.9 | fem-rs | 差距等级 | 对应 Phase |
+|---|---|---|---|---|
+| 复数値 FEM | ✅ ex22/ex25/DPG | ❌ | 🔴 高 | 55 |
+| IMEX 时间积分 | ✅ ex41 | ❌ | 🔴 高 | 56 |
+| AMR 反细化 (Derefinement) | ✅ ex15 | ❌ | 🔴 高 | 57 |
+| 几何多重网格 / LOR 预条件器 | ✅ ex26 | ❌ | 🔴 高 | 58 |
+| SubMesh 子域传输 | ✅ ex34/ex35 | ❌ | 🟡 中 | 59 |
+| DG 弹性力学 | ✅ ex17 | ❌ | 🟡 中 | 60 |
+| DG 可压缩 Euler 方程 | ✅ ex18 | ❌ | 🟡 中 | 60 |
+| 辛时间积分 (Symplectic) | ✅ ex20 | ❌ | 🟡 中 | 61 |
+| 受限 H(curl) 空间 (1D/2D embedded) | ✅ ex31/ex32 | ❌ | 🟡 中 | 62 |
+| PML 完美匹配层 | ✅ ex25 | ❌（依赖复数） | 🟡 中 | 55+63 |
+| 静态凝聚 / 杂化 | ✅ ex4/ex8/hybr | ❌ | 🟢 低 | TBD |
+| 分数阶 Laplacian | ✅ ex33 | ❌ | 🟢 低 | TBD |
+| 障碍问题 / 变分不等式 | ✅ ex36 | ❌ | 🟢 低 | TBD |
+| 拓扑优化 | ✅ ex37 | ❌ | 🟢 低 | TBD |
+| 截断积分 / 浸没边界 | ✅ ex38 | ❌ | 🟢 低 | TBD |
+| 命名属性集 | ✅ ex39 | ❌ | 🟢 低 | TBD |
+| Quad/Hex NC AMR（各向异性） | ✅ | 🔨 Tri/Tet only | 🟢 低 | TBD |
+| GPU 后端 (CUDA/HIP) | ✅ 全库加速 | ❌ CPU only | 🟢 低 | TBD |
+| DPG 完整 miniapp | ✅ | ❌ | 🟢 低 | TBD |
+| 曲面（surface）网格 FEM | ✅ ex7/ex29 | ❌ | 🟢 低 | TBD |
+| TMOP 网格质量优化 | ✅ miniapp | ❌ | 🟢 低 | TBD |
+
+---
+
+### Phase 55 — 复数值 FEM（Complex-Valued Systems）🔴
+> **Target**: MFEM ex22 (时谐阻尼振荡器) + ex25 (PML Maxwell)
+>
+> 对应 MFEM `ComplexOperator` / `ComplexGridFunction` 实现模式
+
+**问题**：时谐 Maxwell 和 Helmholtz 方程含复数系数：
+```
+∇×(a∇×u) − ω²b·u + iωc·u = 0   (H(curl), 时谐电磁)
+−∇·(a∇u) − ω²b·u + iωc·u = 0   (H¹, 时谐声学)
+```
+
+**实现策略** — 2×2 实块方案（不引入复数泛型，WASM 兼容）：
+```
+[K - ω²M    -ωC ] [u_re]   [f_re]
+[ωC          K-ω²M] [u_im] = [f_im]
+```
+其中 `K = stiffness`, `M = mass`, `C = damping`。
+
+**任务清单**：
+- [ ] `ComplexAssembler` — 同时组装实部/虚部矩阵，输出 2×2 `BlockMatrix`
+- [ ] `ComplexCoeff` / `ComplexVectorCoeff` — 复系数 trait（re/im 两路）
+- [ ] `ComplexLinearForm` — 实/虚 RHS 向量对
+- [ ] `apply_dirichlet_complex()` — 复数 Dirichlet BC 消去
+- [ ] `GMRES` on `BlockMatrix` — 复块系统求解（已有 SchurComplement 可复用）
+- [ ] `ex22_complex.rs` — 三变体验证：H¹ / H(curl) / H(div)
+- [ ] `ex25_pml.rs` — PML Maxwell 示例（需先完成复数 H(curl)）
+
+---
+
+### Phase 56 — IMEX 时间积分（Implicit-Explicit Splitting）🔴
+> **Target**: MFEM ex41 (DG/CG IMEX advection-diffusion)
+>
+> 对应 MFEM `TimeDependentOperator` 的 additive 分裂模式
+
+**问题**：对流-扩散方程：
+```
+∂u/∂t + v·∇u − ∇·(κ∇u) = 0
+```
+对流项 `v·∇u` 需显式（CFL 限制），扩散项 `∇·(κ∇u)` 需隐式（稳定性）。
+
+**任务清单**：
+- [ ] `ImexOperator` trait — 分拆为 `explicit_part()` + `implicit_part()`
+- [ ] `ImexEuler` (IMEX Euler: forward for explicit, backward for implicit)
+- [ ] `ImexRK2` (IMEX-SSP-RK2 / Ascher-Ruuth-Spiteri 2-stage)
+- [ ] `ImexRK3` (IMEX EXTk-BDFk 三阶，对应 Navier miniapp 所用方案)
+- [ ] `ImexTimeStepper` — 统一 driver，复用 `ImplicitTimeStepper` 接口
+- [ ] `ex41_imex.rs` — advection-diffusion IMEX 示例，对比纯显式 RK45
+
+---
+
+### Phase 57 — AMR 反细化（Mesh Derefinement / Coarsening）🔴
+> **Target**: MFEM ex15 动态 AMR（refine + derefine + rebalance 循环）
+
+**问题**：当前只有 `refine_marked()`，没有 `derefine_marked()`。动态 AMR
+中解移动后，原精化区域需要缩粗以控制自由度总量。
+
+**任务清单**（Tri3 conforming 版本优先）：
+- [ ] `DerefineTree` — 记录精化历史（父→子元素映射）
+- [ ] `mark_for_derefinement()` — 基于 ZZ/Kelly 估计量标记可缩粗元素
+- [ ] `derefine_marked(mesh, marked)` — 将 4 子三角形合并回父三角形
+- [ ] 解插值：`restrict_to_coarse()` — 细网格解 L² 投影到粗网格
+- [ ] `NCState` / `NCState3D` 中的反细化路径
+- [ ] `ex15_dynamic_amr.rs` — 动态 AMR 演示，误差随时间移动而自适应
+
+---
+
+### Phase 58 — 几何多重网格 / LOR 预条件器🔴
+> **Target**: MFEM ex26 (Multigrid preconditioner for high-order Poisson)
+
+**问题**：代数 AMG 对高阶 P2/P3 标量问题不如几何多重网格高效；
+LOR (Low-Order Refined) 用 P1 网格上的 BoomerAMG 预条件高阶问题。
+
+**两条路线**：
+
+1. **几何 h-多重网格** — 利用网格细化层次，每层使用 `AmgSolver` 作平滑器
+   - `GeomMGHierarchy` — 存储各层 mesh + FESpace + Restriction/Prolongation
+   - `GeomMGPrecond` — V-cycle 实现
+
+2. **LOR 预条件器**（更实用）
+   - `LorMesh::from_high_order(mesh, p)` — 构造 p 次细化的 P1 等效网格
+   - `LorPrecond::new(h1_space)` — 在 LOR 网格上组装 P1 扩散 + AMG
+   - `solve_pcg_lor()` / `solve_gmres_lor()` — 暴露给用户
+
+---
+
+### Phase 59 — SubMesh 子域传输（中优先级）🟡
+> **Target**: MFEM ex34 (SubMesh source function), ex35 (port BCs)
+
+- `SubMesh::extract(mesh, element_tags)` — 从标签提取子网格
+- `SubMesh::transfer_to_parent(gf)` — 子域 FE 函数 → 父网格（L² 投影）
+- `SubMesh::transfer_from_parent(gf)` — 父网格 → 子域（插值/限制）
+- 多物理耦合：电-热（Joule 加热）、流-固耦合示例
+
+---
+
+### Phase 60 — DG 弹性 + 可压缩流（中优先级）🟡
+> **Target**: MFEM ex17 (DG elasticity), ex18 (DG Euler equations)
+
+- `DgElasticityAssembler` — 对称/非对称 Nitsche + interior penalty for elasticity
+- `HyperbolicFormIntegrator` — 守恒律通量 + 近似黎曼求解器（Lax-Friedrichs/Roe）
+- `ex17_dg_elasticity.rs`, `ex18_euler.rs`
+
+---
+
+### Phase 61 — 辛时间积分（中优先级）🟡
+> **Target**: MFEM ex20 (symplectic integration of Hamiltonian systems)
+
+- `HamiltonianSystem` trait — dH/dp + dH/dq
+- `VerletStepper`, `Leapfrog`, `Yoshida4` 辛积分器
+- 能量守恒验证（标准谐振子、钟摆）
+
+---
+
+### Phase 62 — 受限 H(curl) 空间（中优先级）🟡
+> **Target**: MFEM ex31 (anisotropic Maxwell), ex32 (anisotropic Maxwell eigenproblem)
+
+- 2D 网格上嵌入 3D 向量场（等离子体物理 / 晶体学）
+- `RestrictedHCurlSpace` — 在低维网格上定义高维 H(curl) DOF
+
+---
+
+### Phase 63 — PML 完美匹配层（中优先级，依赖 Phase 55）🟡
+> **Target**: MFEM ex25
+
+- 复数坐标拉伸张量系数 `PmlCoeff` ( J-based anisotropic μ/ε)
+- `ex25_pml.rs` — PML Maxwell 2D 无界域散射
+
 ### Phase 48 — linger Update + Higher-Order Elements ✅
 > **Completed** — sparse direct solvers, new Krylov methods, higher-order FEM
 

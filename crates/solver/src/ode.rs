@@ -941,6 +941,209 @@ impl ImexArk3 {
     }
 }
 
+// ─── IMEX Euler (1st order) ──────────────────────────────────────────────────
+
+/// First-order IMEX Euler (forward Euler for explicit, backward Euler for implicit).
+///
+/// Integrates the split system:
+/// ```text
+///   du/dt = f_E(t, u) + f_I(t, u)
+/// ```
+///
+/// One step:
+/// ```text
+///   (I − dt J_I(t+dt)) Δu = dt [f_E(tₙ, uₙ) + f_I(t+dt, uₙ)]
+///   u_{n+1} = uₙ + Δu
+/// ```
+///
+/// First-order accurate.  Unconditionally stable for the implicit part.
+pub struct ImexEuler;
+
+impl ImexEuler {
+    /// Take one IMEX Euler step advancing `u` by `dt` from time `t`.
+    pub fn step<FE, FI, J>(
+        &self,
+        t:            f64,
+        dt:           f64,
+        u:            &mut [f64],
+        rhs_explicit: FE,
+        rhs_implicit: FI,
+        jac_implicit: J,
+    )
+    where
+        FE: Fn(f64, &[f64], &mut [f64]),
+        FI: Fn(f64, &[f64], &mut [f64]),
+        J:  Fn(f64, &[f64]) -> CsrMatrix<f64>,
+    {
+        let n = u.len();
+        let cfg = SolverConfig { rtol: 1e-10, atol: 0.0, max_iter: 500, verbose: false, ..SolverConfig::default() };
+
+        // Explicit part at current state
+        let mut fe = vec![0.0f64; n];
+        rhs_explicit(t, u, &mut fe);
+
+        // Implicit part evaluated at u^n (Picard linearisation)
+        let mut fi = vec![0.0f64; n];
+        rhs_implicit(t + dt, u, &mut fi);
+
+        // Build (I − dt J_I) for implicit correction
+        let jac = jac_implicit(t + dt, u);
+        let lhs = identity_minus_dt_jac(&jac, dt);
+
+        // RHS: dt * (f_E + f_I)
+        let b: Vec<f64> = (0..n).map(|i| dt * (fe[i] + fi[i])).collect();
+
+        // Solve for Δu
+        let mut du = vec![0.0f64; n];
+        solve_gmres(&lhs, &b, &mut du, 30, &cfg).expect("ImexEuler: linear solve failed");
+
+        for i in 0..n { u[i] += du[i]; }
+    }
+
+    /// Integrate from `t0` to `t_end` with fixed step `dt`.
+    ///
+    /// Returns the final time reached.
+    pub fn integrate<FE, FI, J>(
+        &self,
+        t0:           f64,
+        t_end:        f64,
+        u:            &mut [f64],
+        dt:           f64,
+        rhs_explicit: FE,
+        rhs_implicit: FI,
+        jac_implicit: J,
+    ) -> f64
+    where
+        FE: Fn(f64, &[f64], &mut [f64]),
+        FI: Fn(f64, &[f64], &mut [f64]),
+        J:  Fn(f64, &[f64]) -> CsrMatrix<f64>,
+    {
+        let mut t = t0;
+        while t < t_end - 1e-14 {
+            let h = dt.min(t_end - t);
+            self.step(t, h, u, &rhs_explicit, &rhs_implicit, &jac_implicit);
+            t += h;
+        }
+        t
+    }
+}
+
+// ─── IMEX SSP-RK2 (2nd order) ────────────────────────────────────────────────
+
+/// Second-order IMEX SSP-RK2 (Pareschi & Russo, 2005, Scheme SI-IMEX(2,2,2)).
+///
+/// Integrates the split system:
+/// ```text
+///   du/dt = f_E(t, u) + f_I(t, u)
+/// ```
+///
+/// Butcher tableau (implicit): γ = 1 − 1/√2
+/// ```text
+///   γ   |  γ     0
+///   1   | 1-γ    γ
+///  -----|-----------
+///       | 1-γ    γ
+/// ```
+/// Explicit part uses the corresponding 2nd-order SSP weights.
+///
+/// 2nd-order accurate, A-stable implicit component.
+pub struct ImexSsp2;
+
+const IMEX_SSP2_GAMMA: f64 = 1.0 - std::f64::consts::FRAC_1_SQRT_2; // 1 − 1/√2 ≈ 0.2929
+
+impl ImexSsp2 {
+    /// Take one IMEX SSP-RK2 step advancing `u` by `dt` from time `t`.
+    pub fn step<FE, FI, J>(
+        &self,
+        t:            f64,
+        dt:           f64,
+        u:            &mut [f64],
+        rhs_explicit: FE,
+        rhs_implicit: FI,
+        jac_implicit: J,
+    )
+    where
+        FE: Fn(f64, &[f64], &mut [f64]),
+        FI: Fn(f64, &[f64], &mut [f64]),
+        J:  Fn(f64, &[f64]) -> CsrMatrix<f64>,
+    {
+        let n = u.len();
+        let g = IMEX_SSP2_GAMMA;
+        let cfg = SolverConfig { rtol: 1e-10, atol: 0.0, max_iter: 500, verbose: false, ..SolverConfig::default() };
+
+        // ARS(2,2,2): Ascher-Ruuth-Spiteri 1997
+        // Implicit tableau c^I = (γ, 1),  A^I: row1=[γ,0], row2=[1-γ,γ],  b^I = (1-γ, γ)
+        // Explicit tableau c^E = (0, γ),  A^E: row1=[0,0], row2=[γ,0],    b^E = (1-γ, γ)
+
+        // ── Stage 1 ──────────────────────────────────────────────────────────
+        // Explicit: k₁^E = f_E(t + 0*dt, u)
+        let mut ke1 = vec![0.0f64; n];
+        rhs_explicit(t, u, &mut ke1);
+
+        // Implicit: (I − dt γ J(t + γdt, u)) k₁^I = f_I(t + γdt, u)
+        let t1 = t + g * dt;
+        let jac1 = jac_implicit(t1, u);
+        let lhs1 = identity_minus_dt_jac(&jac1, dt * g);
+        let mut fi1 = vec![0.0f64; n];
+        rhs_implicit(t1, u, &mut fi1);
+        let mut ki1 = vec![0.0f64; n];
+        solve_gmres(&lhs1, &fi1, &mut ki1, 30, &cfg).expect("ImexSsp2 stage 1 solve failed");
+
+        // ── Stage 2 ──────────────────────────────────────────────────────────
+        // Combined predictor: u₂ = u + dt·γ·k₁^E + dt·(1-γ)·k₁^I
+        // (a^E_{21} = γ,  a^I_{21} = 1-γ)
+        let mut u2 = u.to_vec();
+        for i in 0..n {
+            u2[i] += dt * g * ke1[i] + dt * (1.0 - g) * ki1[i];
+        }
+
+        // Explicit: k₂^E = f_E(t + γdt, u₂)
+        let mut ke2 = vec![0.0f64; n];
+        rhs_explicit(t1, &u2, &mut ke2);
+
+        // Implicit: (I − dt γ J(t + dt, u₂)) k₂^I = f_I(t + dt, u₂)
+        let t2 = t + dt;
+        let jac2 = jac_implicit(t2, &u2);
+        let lhs2 = identity_minus_dt_jac(&jac2, dt * g);
+        let mut fi2 = vec![0.0f64; n];
+        rhs_implicit(t2, &u2, &mut fi2);
+        let mut ki2 = vec![0.0f64; n];
+        solve_gmres(&lhs2, &fi2, &mut ki2, 30, &cfg).expect("ImexSsp2 stage 2 solve failed");
+
+        // ── Update: u_{n+1} = u + dt·(1-γ)·(k₁^E+k₁^I) + dt·γ·(k₂^E+k₂^I) ─
+        for i in 0..n {
+            u[i] += dt * ((1.0 - g) * (ke1[i] + ki1[i]) + g * (ke2[i] + ki2[i]));
+        }
+    }
+
+    /// Integrate from `t0` to `t_end` with fixed step `dt`.
+    ///
+    /// Returns the final time reached.
+    pub fn integrate<FE, FI, J>(
+        &self,
+        t0:           f64,
+        t_end:        f64,
+        u:            &mut [f64],
+        dt:           f64,
+        rhs_explicit: FE,
+        rhs_implicit: FI,
+        jac_implicit: J,
+    ) -> f64
+    where
+        FE: Fn(f64, &[f64], &mut [f64]),
+        FI: Fn(f64, &[f64], &mut [f64]),
+        J:  Fn(f64, &[f64]) -> CsrMatrix<f64>,
+    {
+        let mut t = t0;
+        while t < t_end - 1e-14 {
+            let h = dt.min(t_end - t);
+            self.step(t, h, u, &rhs_explicit, &rhs_implicit, &jac_implicit);
+            t += h;
+        }
+        t
+    }
+}
+
 /// Build S = M + α K  as a CsrMatrix.
 fn build_effective_stiffness(mass: &CsrMatrix<f64>, stiff: &CsrMatrix<f64>, alpha: f64) -> CsrMatrix<f64> {
     let n = mass.nrows;
@@ -1284,6 +1487,59 @@ mod tests {
 
         let exact = (-lambda * t_f).exp();
         assert!((u[0] - exact).abs() < 0.01, "ImexArk3 adaptive: u={:.4e}, exact={exact:.4e}", u[0]);
+    }
+
+    #[test]
+    fn imex_euler_stiff_decay_stable() {
+        // Split: f_E = 0, f_I = -lambda*u.  IMEX Euler should remain stable for large dt.
+        let lambda = 100.0_f64;
+        let f_e = |_t: f64, _u: &[f64], out: &mut [f64]| { out[0] = 0.0; };
+        let f_i = move |_t: f64, u: &[f64], out: &mut [f64]| { out[0] = -lambda * u[0]; };
+        let jac = move |_t: f64, _u: &[f64]| {
+            let mut coo = CooMatrix::<f64>::new(1, 1);
+            coo.add(0, 0, -lambda);
+            coo.into_csr()
+        };
+
+        let solver = ImexEuler;
+        let mut u = vec![1.0_f64];
+        solver.integrate(0.0, 1.0, &mut u, 0.1, f_e, f_i, jac);
+
+        assert!(u[0].abs() < 1e-2, "ImexEuler stiff decay unstable: u={:.3e}", u[0]);
+    }
+
+    #[test]
+    fn imex_ssp2_second_order_check() {
+        // Split test: u' = sin(omega t) - lambda u, u(0)=0.
+        // Exact: u(t) = [lambda sin(omega t) - omega cos(omega t) + omega exp(-lambda t)] / (lambda^2 + omega^2).
+        let lambda = 100.0_f64;
+        let omega = std::f64::consts::PI;
+
+        let f_e = move |t: f64, _u: &[f64], out: &mut [f64]| { out[0] = (omega * t).sin(); };
+        let f_i = move |_t: f64, u: &[f64], out: &mut [f64]| { out[0] = -lambda * u[0]; };
+        let jac = |_t: f64, _u: &[f64]| {
+            let mut coo = CooMatrix::<f64>::new(1, 1);
+            coo.add(0, 0, -lambda);
+            coo.into_csr()
+        };
+
+        let exact = move |t: f64| {
+            (lambda * (omega * t).sin() - omega * (omega * t).cos() + omega * (-lambda * t).exp())
+                / (lambda * lambda + omega * omega)
+        };
+        let t_end = 1.0_f64;
+
+        let mut u1 = vec![0.0_f64];
+        let mut u2 = vec![0.0_f64];
+        let solver = ImexSsp2;
+        solver.integrate(0.0, t_end, &mut u1, 0.1, f_e, f_i, jac);
+        solver.integrate(0.0, t_end, &mut u2, 0.05, f_e, f_i, jac);
+
+        let e1 = (u1[0] - exact(t_end)).abs();
+        let e2 = (u2[0] - exact(t_end)).abs();
+        let order = (e1 / e2).log2();
+
+        assert!(order > 1.7, "ImexSsp2 order too low: order={order:.2}, e1={e1:.3e}, e2={e2:.3e}");
     }
 
     /// Heat equation: du/dt = -λ u (modal decomposition of Laplacian).

@@ -1090,6 +1090,8 @@ pub use ode::{
     Newmark, NewmarkState,
     GeneralizedAlpha, GeneralizedAlphaState,
     ImexArk3,
+    ImexEuler,
+    ImexSsp2,
 };
 pub mod sli;
 pub use sli::{solve_jacobi_sli, solve_gs_sli};
