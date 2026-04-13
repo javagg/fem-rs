@@ -456,7 +456,7 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 | **ex4** | −∇·(**u**) = f, **u** = −κ∇p (Darcy) | H(div) RT + L² | ✅ `ex4_darcy` H(div) RT0 grad-div MINRES |
 | **ex5** | Saddle-point Darcy/Stokes | H(div) × L² | ✅ `ex5_mixed_darcy` block PGMRES |
 | **ex22** | Time-harmonic Maxwell (complex coeff.) | H(curl) | Phase 7+ |
-| **em_magnetostatics_2d** (this project) | −∇·(ν∇Az) = Jz | H¹ P1 (2D A_z) | ✅ |
+| **em_magnetostatics_2d** (this project) | −∇·(ν∇Az) = Jz | H¹ P1 (2D A_z) | ✅ 含制造解精度/P1收敛/高μ_r跳变系数回归 |
 
 ### Tier 3 — Time Integration (Phase 7+)
 

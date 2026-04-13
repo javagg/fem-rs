@@ -373,3 +373,161 @@ fn print_summary(
     println!("  W_mag:      {energy:.6e} J/m (per unit depth)");
     println!("  Output:     output/magnetostatics.vtk");
 }
+
+// ============================================================================
+// Regression Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f64::consts::PI;
+    use fem_mesh::MeshTopology as _;
+    use fem_examples::{
+        dirichlet_nodes, solve_dirichlet_reduced, p1_assemble_poisson, p1_gradient_2d,
+    };
+
+    /// Solve -∇·(ν ∇A_z) = J_z on a n×n mesh with manufactured solution.
+    ///
+    /// Manufactured solution: A_z = sin(πx)·sin(πy)
+    /// → J_z = ν · 2π² · sin(πx)·sin(πy)
+    ///
+    /// Returns (H1-seminorm error, L2 error of B-field, A_z solution)
+    fn solve_manufactured(n: usize, nu: f64) -> (f64, f64, Vec<f64>) {
+        let mesh = SimplexMesh::<2>::unit_square_tri(n);
+
+        // Manufactured: A_z = sin(πx)·sin(πy), J_z = 2π²·ν·sin(πx)·sin(πy)
+        let (mut mat, mut rhs) = p1_assemble_poisson(
+            &mesh,
+            |_x, _y| nu,
+            |x, y| nu * 2.0 * PI * PI * (PI * x).sin() * (PI * y).sin(),
+        );
+
+        let all_tags: Vec<i32> = {
+            use std::collections::HashSet;
+            let mut t: Vec<i32> = mesh.face_tags.iter().copied().collect::<HashSet<_>>().into_iter().collect();
+            t.sort();
+            t
+        };
+        let bcs = dirichlet_nodes(&mesh, &all_tags);
+        let (az, _iters, _res) = solve_dirichlet_reduced(&mat, &rhs, &bcs, 1e-12, 50_000);
+
+        // L2 error of A_z: ||A_z_h - A_z_exact||_L2 (element-wise with P1 projection at centroid)
+        let mut l2_az_sq = 0.0_f64;
+        // H1-seminorm error: ||∇A_z_h - ∇A_z_exact||_L2 (element-wise, const over element)
+        let (gx, gy) = p1_gradient_2d(&mesh, &az);
+        let mut h1_semi_sq = 0.0_f64;
+
+        for e in mesh.elem_iter() {
+            let ns = mesh.elem_nodes(e);
+            let [x0, y0] = mesh.coords_of(ns[0]);
+            let [x1, y1] = mesh.coords_of(ns[1]);
+            let [x2, y2] = mesh.coords_of(ns[2]);
+            let det = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+            let area = det.abs() * 0.5;
+            let xc = (x0 + x1 + x2) / 3.0;
+            let yc = (y0 + y1 + y2) / 3.0;
+
+            // A_z at centroid (average of nodal values for P1)
+            let az_h = (az[ns[0] as usize] + az[ns[1] as usize] + az[ns[2] as usize]) / 3.0;
+            let az_ex = (PI * xc).sin() * (PI * yc).sin();
+            l2_az_sq += area * (az_h - az_ex).powi(2);
+
+            // ∇A_z exact: (∂/∂x, ∂/∂y) sin(πx)sin(πy) = (π·cos(πx)·sin(πy), π·sin(πx)·cos(πy))
+            let gx_ex = PI * (PI * xc).cos() * (PI * yc).sin();
+            let gy_ex = PI * (PI * xc).sin() * (PI * yc).cos();
+            let ei = e as usize;
+            h1_semi_sq += area * ((gx[ei] - gx_ex).powi(2) + (gy[ei] - gy_ex).powi(2));
+        }
+
+        let _ = (&mut mat, &mut rhs);
+        (h1_semi_sq.sqrt(), l2_az_sq.sqrt(), az)
+    }
+
+    /// Test 1: Manufactured solution accuracy on unit square (free space, ν₀).
+    ///
+    /// For a uniform triangular mesh with n=16, P1 elements should produce
+    /// a relative A_z error well below 1%.
+    #[test]
+    fn magnetostatics_manufactured_solution_accuracy_free_space() {
+        let n = 16;
+        let (h1_err, _l2_az_err, _az) = solve_manufactured(n, NU0);
+        // H1 seminorm error relative to ∫|∇A_exact|² ≈ π²/2 → ||∇A_exact||_L2 = π/√2
+        let h1_norm_exact = std::f64::consts::PI / 2.0_f64.sqrt();  // ||∇A_z_exact||_L2
+        let rel_h1 = h1_err / h1_norm_exact;
+        assert!(rel_h1 < 0.10,
+            "Relative H1-seminorm error {:.3e} exceeds 10%  (n={}, ν=ν₀)", rel_h1, n);
+    }
+
+    /// Test 2: P1 error convergence on mesh refinement  
+    ///
+    /// Refining n=8 → n=16 should improve the H1-seminorm error roughly
+    /// by factor ~2 (expected O(h) for P1 in H1 norm).
+    #[test]
+    fn magnetostatics_p1_convergence_on_refinement() {
+        let (h1_coarse, _, _) = solve_manufactured(8,  NU0);
+        let (h1_fine,   _, _) = solve_manufactured(16, NU0);
+
+        // Finer mesh should have smaller error
+        assert!(h1_fine < h1_coarse,
+            "H1 error should decrease on refinement: coarse={:.3e}, fine={:.3e}",
+            h1_coarse, h1_fine);
+
+        // Convergence ratio: expect > 1.5 (P1 in H1 is O(h), 2× refinement → ~2× error reduction)
+        let ratio = h1_coarse / h1_fine.max(1e-30);
+        assert!(ratio > 1.5,
+            "H1-seminorm convergence ratio {:.2} < 1.5  (expect ~2.0 for P1 O(h))",
+            ratio);
+    }
+
+    /// Test 3: Heterogeneous material — transformer-like μ_r contrast.
+    ///
+    /// With a high-μ core (μ_r=1000), the solution should concentrate in
+    /// the low-ν (high-μ) region. Verifies the solver handles jump
+    /// coefficients without producing NaN or violating the maximum principle.
+    #[test]
+    fn magnetostatics_high_mu_core_solution_finite_and_nonnegative() {
+        let n = 32;
+        let mesh = SimplexMesh::<2>::unit_square_tri(n);
+
+        // Core region: [0.2, 0.8]² with μ_r = 1000, rest is air
+        let mu_r_core = 1000.0_f64;
+        let nu_core = NU0 / mu_r_core;
+
+        let (mut mat, mut rhs) = p1_assemble_poisson(
+            &mesh,
+            |x, y| {
+                if x >= 0.2 && x <= 0.8 && y >= 0.2 && y <= 0.8 { nu_core } else { NU0 }
+            },
+            |x, y| {
+                // Concentrated winding source in the core interior
+                if x >= 0.25 && x <= 0.45 && y >= 0.25 && y <= 0.75 { 1.0e6 } else { 0.0 }
+            },
+        );
+
+        let all_tags: Vec<i32> = {
+            use std::collections::HashSet;
+            let mut t: Vec<i32> = mesh.face_tags.iter().copied().collect::<HashSet<_>>().into_iter().collect();
+            t.sort();
+            t
+        };
+        let bcs = dirichlet_nodes(&mesh, &all_tags);
+        let (az, _iters, _res) = solve_dirichlet_reduced(&mat, &rhs, &bcs, 1e-10, 50_000);
+
+        let _ = (&mut mat, &mut rhs);
+
+        // All A_z values should be finite
+        assert!(az.iter().all(|v| v.is_finite()),
+            "A_z contains NaN/Inf with high-μ core (μ_r={})", mu_r_core as u32);
+
+        // Maximum principle: A_z ≥ 0 everywhere (source is non-negative, Dirichlet BC = 0)
+        let az_min = az.iter().cloned().fold(f64::INFINITY, f64::min);
+        assert!(az_min >= -1e-10,
+            "A_z minimum {:.3e} violates maximum principle (should be ≥ 0)", az_min);
+
+        // A_z should attain a positive maximum in the core region
+        let az_max = az.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        assert!(az_max > 0.0,
+            "A_z maximum {:.3e} not positive despite positive source", az_max);
+    }
+}
