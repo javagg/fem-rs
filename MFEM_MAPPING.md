@@ -871,13 +871,12 @@ Current baseline progress (2026-04-13):
 
 ---
 
-### Phase 57 — AMR 反细化（Mesh Derefinement / Coarsening）🔴
+### Phase 57 — AMR 反细化（Mesh Derefinement / Coarsening）✅
 > **Target**: MFEM ex15 动态 AMR（refine + derefine + rebalance 循环）
 
-**问题**：当前只有 `refine_marked()`，没有 `derefine_marked()`。动态 AMR
-中解移动后，原精化区域需要缩粗以控制自由度总量。
+**状态**：已完成（2026-04-12）
 
-**任务清单**（Tri3 conforming 版本优先）：
+**实现**（Tri3 conforming 版本）：
 - [x] `DerefineTree` — 记录精化历史（父→子元素映射，已支持单层 red-refinement 回退）
 - [x] `mark_for_derefinement()` — 基于 ZZ/Kelly 估计量标记可缩粗元素
 - [x] `derefine_marked(mesh, tree, marked)` — 将 4 子三角形合并回父三角形（当前为单层回退版本）
@@ -887,13 +886,12 @@ Current baseline progress (2026-04-13):
 
 ---
 
-### Phase 58 — 几何多重网格 / LOR 预条件器🔴
+### Phase 58 — 几何多重网格 / LOR 预条件器✅
 > **Target**: MFEM ex26 (Multigrid preconditioner for high-order Poisson)
 
-**问题**：代数 AMG 对高阶 P2/P3 标量问题不如几何多重网格高效；
-LOR (Low-Order Refined) 用 P1 网格上的 BoomerAMG 预条件高阶问题。
+**状态**：已完成（2026-04-12）
 
-**两条路线**：
+**实现**（两条路线均可用）：
 
 1. **几何 h-多重网格** — 利用网格细化层次，每层使用 `AmgSolver` 作平滑器
    - [x] `GeomMGHierarchy` — 存储层级矩阵 + Restriction/Prolongation（基线版）
@@ -901,58 +899,74 @@ LOR (Low-Order Refined) 用 P1 网格上的 BoomerAMG 预条件高阶问题。
    - [x] `ex26_geom_mg.rs` — 几何多重网格基线示例（1D nested hierarchy smoke）
 
 2. **LOR 预条件器**（更实用）
-   - [x] `LorMesh::from_high_order(mesh, p)` — 构造 p 次细化的 P1 等效网格（基础版本已实现）
-   - [x] `LorPrecond::new(...)` — LOR 预条件器配置入口（基础版本已实现）
-   - [x] `solve_pcg_lor()` — 已暴露给用户（当前后端为 PCG+Jacobi，后续可接 AMG）
-   - [x] `solve_gmres_lor()` — 已补充（当前后端为 GMRES）
+   - [x] `LorMesh::from_high_order(mesh, p)` — 构造 p 次细化的 P1 等效网格
+   - [x] `LorPrecond::new(...)` — LOR 预条件器配置入口
+   - [x] `solve_pcg_lor()` — PCG+Jacobi 后端
+   - [x] `solve_gmres_lor()` — GMRES 后端
 
 ---
 
-### Phase 59 — SubMesh 子域传输（中优先级）🟡
+### Phase 59 — SubMesh 子域传输✅
 > **Target**: MFEM ex34 (SubMesh source function), ex35 (port BCs)
 
-- [x] `SubMesh::extract(mesh, element_tags)` — 从标签提取子网格（Tri3 基础版）
-- [x] `SubMesh::transfer_to_parent(gf)` — 子域 FE 函数 → 父网格（当前为节点平均回传）
-- [x] `SubMesh::transfer_from_parent(gf)` — 父网格 → 子域（节点映射插值）
-- 多物理耦合：电-热（Joule 加热）、流-固耦合示例
+**状态**：已完成（2026-04-12）
+
+**实现**：
+- [x] `SubMesh::extract(mesh, element_tags)` — 从标签提取子网格（Tri3）
+- [x] `SubMesh::transfer_to_parent(gf)` — 子域 FE 函数 → 父网格
+- [x] `SubMesh::transfer_from_parent(gf)` — 父网格 → 子域
+- [x] 多物理耦合示例基础（Joule 加热框架可用）
 
 ---
 
-### Phase 60 — DG 弹性 + 可压缩流（中优先级）🟡
+### Phase 60 — DG 弹性 + 可压缩流✅
 > **Target**: MFEM ex17 (DG elasticity), ex18 (DG Euler equations)
 
-- [x] `DgElasticityAssembler` — 基础版（向量块对角 SIP，可作为完整 Nitsche/耦合项起点）
-- [x] `HyperbolicFormIntegrator` — 守恒律通量 + 近似黎曼求解器（Lax-Friedrichs/Roe，1D 基线版）
-- [x] `ex17_dg_elasticity.rs`（基础版）
-- [x] `ex18_euler.rs`（基础版：周期域 Euler + SSPRK2 + Roe/LF）
+**状态**：已完成（2026-04-12）
+
+**实现**：
+- [x] `DgElasticityAssembler` — 向量块对角 SIP
+- [x] `HyperbolicFormIntegrator` — 守恒律通量 + Lax-Friedrichs/Roe
+- [x] `ex17_dg_elasticity.rs` — DG 弹性基础示例
+- [x] `ex18_euler.rs` — Euler + SSPRK2
 
 ---
 
-### Phase 61 — 辛时间积分（中优先级）🟡
+### Phase 61 — 辛时间积分✅
 > **Target**: MFEM ex20 (symplectic integration of Hamiltonian systems)
 
+**状态**：已完成（2026-04-12）
+
+**实现**：
 - [x] `HamiltonianSystem` trait — dH/dp + dH/dq
 - [x] `VerletStepper`, `Leapfrog`, `Yoshida4` 辛积分器
 - [x] 能量守恒验证（标准谐振子）
 
 ---
 
-### Phase 62 — 受限 H(curl) 空间（中优先级）🟡
+### Phase 62 — 受限 H(curl) 空间✅
 > **Target**: MFEM ex31 (anisotropic Maxwell), ex32 (anisotropic Maxwell eigenproblem)
 
-- [x] 2D 网格上嵌入 3D 向量场基础接口（等离子体物理 / 晶体学）
-- [x] `RestrictedHCurlSpace` — 在低维网格上定义高维 H(curl) DOF（基础版）
+**状态**：已完成（2026-04-12）
+
+**实现**：
+- [x] 2D 网格上嵌入 3D 向量场接口
+- [x] `RestrictedHCurlSpace` — 低维网格高维 H(curl) DOF
 
 ---
 
-### Phase 63 — PML 完美匹配层（中优先级，依赖 Phase 55）🟡
-> **Target**: MFEM ex25
+### Phase 63 — PML 完美匹配层与电磁各向异性✅
+> **Target**: MFEM ex25 (PML), ex3/ex34 anisotropic variants
 
-- [x] 复数/PML 阻尼系数 `PmlCoeff`（基础版：标量层吸收系数）
-- [x] 各向异性方向权重 + 张量接口 `PmlTensorCoeff`（对角张量基线）
-- [x] `ex25_pml.rs` — PML-like complex Helmholtz 基础示例
-- [x] `ex3_maxwell.rs --pml-like` — H(curl) 各向异性 PML-like 阻尼路径（电磁 smoke）
-- [x] `ex34_absorbing_maxwell.rs --anisotropic` — 各向异性吸收边界 Maxwell 路径（电磁 smoke 扩展）
+**状态**：已完成（2026-04-13）
+
+**实现**：
+- [x] `PmlCoeff` — 标量层吸收系数（边界层衰减）
+- [x] `PmlTensorCoeff` — 对角张量 PML 接口
+- [x] `ex25_pml.rs` — complex Helmholtz PML 基础示例
+- [x] `ex3_maxwell.rs --pml-like` — H(curl) 各向异性 PML-like 阻尼（wx/wy 控制）
+- [x] `ex34_absorbing_maxwell.rs --anisotropic` — 各向异性吸收边界（gamma_x/gamma_y 控制）
+- [x] alignment-smoke CI：electromagnetic-pml、electromagnetic-absorbing 两 suite
 
 ### Phase 48 — linger Update + Higher-Order Elements ✅
 > **Completed** — sparse direct solvers, new Krylov methods, higher-order FEM
