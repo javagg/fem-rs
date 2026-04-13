@@ -1,4 +1,4 @@
-# fem-rs
+﻿# fem-rs
 
 A general-purpose finite element method (FEM) library in Rust, targeting
 feature parity with [MFEM](https://mfem.org/). Designed for clarity,
@@ -84,9 +84,6 @@ git submodule update --init --recursive
 # build + test everything
 cargo test --workspace
 
-# run the electrostatics example (built-in unit-square mesh, 32×32)
-cargo run --example em_electrostatics
-
 # run the magnetostatics example
 cargo run --example em_magnetostatics_2d
 
@@ -114,78 +111,7 @@ that provides:
 - **Gradient recovery** �?element-averaged `∇u` from nodal DOFs
 - **VTK Legacy ASCII writer** �?direct ParaView/VisIt input
 
-### 1. Electrostatics (`em_electrostatics`)
-
-Solves `-∇�?ε ∇�? = ρ` for the electric potential φ.
-
-```
-cargo run --example em_electrostatics [-- OPTIONS]
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--case <name>` | `parallel_plate` | Test case (see below) |
-| `--n <N>` | `32` | Mesh refinement: N×N squares |
-| `--mesh <file.msh>` | �?| Load a GMSH v4 mesh instead |
-| `--tol <f>` | `1e-10` | PCG relative tolerance |
-| `--max-iter <N>` | `10000` | PCG maximum iterations |
-| `--voltage <V>` | `1.0` | Applied voltage (coaxial case) |
-| `--dirichlet-tags <1,2>` | �?| Override Dirichlet boundary tags |
-
-#### Built-in cases
-
-**`parallel_plate`** (default) �?parallel plate capacitor
-
-```
-φ = 0  on y = 0   (bottom, tag 1)
-φ = 1  on y = 1   (top,    tag 3)
-∂�?∂n = 0 on x = 0, 1  (left/right, tags 2, 4)
-
-Exact solution: φ(x,y) = y   �?  L2 error �?machine ε for P1
-```
-
-```bash
-cargo run --example em_electrostatics -- --case parallel_plate --n 64
-```
-
-**`point_charge`** �?point charge at domain centre
-
-```
--ε₀ ∇²�?= δ(x-0.5, y-0.5)  (approximated by uniform disc)
-φ = 0 on all boundaries
-```
-
-```bash
-cargo run --example em_electrostatics -- --case point_charge --n 64
-```
-
-**`coaxial`** �?coaxial cable cross-section
-
-```
-φ = V_inner on inner circle  (tag 1)
-φ = 0       on outer circle  (tag 2)
-
-Exact: φ(r) = V·ln(r/r_outer) / ln(r_inner/r_outer)
-```
-
-```bash
-# with built-in mesh (polygonal approximation):
-cargo run --example em_electrostatics -- --case coaxial
-
-# with a proper GMSH mesh:
-gmsh examples/meshes/coaxial.geo -2 -o examples/meshes/coaxial.msh -format msh4
-cargo run --example em_electrostatics -- \
-    --case coaxial --mesh examples/meshes/coaxial.msh
-```
-
-#### Output
-
-`output/electrostatics.vtk` �?open with ParaView or VisIt.
-Fields: `potential_V` (nodal scalar), `E_field_Vm` (element vector).
-
----
-
-### 2. 2-D Magnetostatics (`em_magnetostatics_2d`)
+### 1. 2-D Magnetostatics (`em_magnetostatics_2d`)
 
 Solves `-∇�?ν ∇A_z) = J_z` for the z-component of magnetic vector potential.
 Magnetic flux density recovered as `B_x = ∂A_z/∂y`, `B_y = -∂A_z/∂x`.
@@ -286,15 +212,6 @@ Sample geometry files are in `examples/meshes/`:
 ---
 
 ## Convergence Test
-
-The parallel plate example has a known exact solution `φ(x,y) = y`.
-Run at different refinements to confirm O(h²) L2 convergence for P1 elements:
-
-```bash
-for N in 4 8 16 32 64; do
-  cargo run -q --example em_electrostatics -- --n $N 2>&1 | grep "L2 error"
-done
-```
 
 Run the high-order convergence sweep (P1/P2/P3 on 2-D Poisson):
 
