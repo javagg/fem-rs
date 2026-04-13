@@ -16,6 +16,12 @@ fn main() {
     if args.merge_boundary {
         println!("  Mode: merge-boundary (inlet + outlet aggregation)");
     }
+    if args.intersection_region {
+        println!("  Mode: intersection-region (inlet ∩ outlet)");
+    }
+    if args.difference_region {
+        println!("  Mode: difference-region (inlet \\ outlet)");
+    }
 
     let msh_text = r#"$MeshFormat
 2.2 0 8
@@ -88,6 +94,32 @@ $EndElements
         );
     }
 
+    if args.intersection_region {
+        let inlet_set: HashSet<u32> = inlet_faces.iter().copied().collect();
+        let outlet_set: HashSet<u32> = outlet_faces.iter().copied().collect();
+        let intersection: HashSet<u32> = inlet_set
+            .intersection(&outlet_set)
+            .copied()
+            .collect();
+        println!(
+            "  intersection (inlet ∩ outlet): {} faces",
+            intersection.len()
+        );
+    }
+
+    if args.difference_region {
+        let inlet_set: HashSet<u32> = inlet_faces.iter().copied().collect();
+        let outlet_set: HashSet<u32> = outlet_faces.iter().copied().collect();
+        let difference: HashSet<u32> = inlet_set
+            .difference(&outlet_set)
+            .copied()
+            .collect();
+        println!(
+            "  difference (inlet \\ outlet): {} faces",
+            difference.len()
+        );
+    }
+
     assert_eq!(fluid_elems.len(), mesh.n_elems());
     assert!(!inlet_faces.is_empty());
     assert!(!outlet_faces.is_empty());
@@ -98,16 +130,23 @@ $EndElements
 
 struct Args {
     merge_boundary: bool,
+    intersection_region: bool,
+    difference_region: bool,
 }
 
 fn parse_args() -> Args {
     let mut args = Args {
         merge_boundary: false,
+        intersection_region: false,
+        difference_region: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
-        if arg.as_str() == "--merge-boundary" {
-            args.merge_boundary = true;
+        match arg.as_str() {
+            "--merge-boundary" => { args.merge_boundary = true; }
+            "--intersection-region" => { args.intersection_region = true; }
+            "--difference-region" => { args.difference_region = true; }
+            _ => {}
         }
     }
     args
@@ -163,5 +202,107 @@ $EndElements
         assert!(!inlet.is_empty());
         assert!(!outlet.is_empty());
         assert_eq!(merged.len(), inlet.len() + outlet.len());
+    }
+
+    #[test]
+    fn named_attributes_intersection_mode() {
+        let msh_text = r#"$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$PhysicalNames
+3
+2 1 "fluid"
+1 1 "inlet"
+1 3 "outlet"
+$EndPhysicalNames
+$Nodes
+4
+1 0 0 0
+2 1 0 0
+3 1 1 0
+4 0 1 0
+$EndNodes
+$Elements
+6
+1 1 2 1 1 1 2
+2 1 2 2 2 2 3
+3 1 2 3 3 3 4
+4 1 2 4 4 4 1
+5 2 2 1 1 1 2 3
+6 2 2 1 1 1 3 4
+$EndElements
+"#;
+
+        let msh = read_msh(msh_text.as_bytes()).expect("failed to parse");
+        let registry = msh.named_attribute_registry();
+        let mesh: SimplexMesh<2> = msh.into_2d().expect("expected 2D mesh");
+
+        let inlet = mesh
+            .face_ids_for_named_set(&registry, "inlet")
+            .expect("missing inlet");
+        let outlet = mesh
+            .face_ids_for_named_set(&registry, "outlet")
+            .expect("missing outlet");
+
+        let inlet_set: std::collections::HashSet<u32> = inlet.iter().copied().collect();
+        let outlet_set: std::collections::HashSet<u32> = outlet.iter().copied().collect();
+        let intersection: std::collections::HashSet<u32> = inlet_set
+            .intersection(&outlet_set)
+            .copied()
+            .collect();
+
+        // For this mesh, inlet and outlet don't share faces, so intersection is empty
+        assert_eq!(intersection.len(), 0);
+    }
+
+    #[test]
+    fn named_attributes_difference_mode() {
+        let msh_text = r#"$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$PhysicalNames
+3
+2 1 "fluid"
+1 1 "inlet"
+1 3 "outlet"
+$EndPhysicalNames
+$Nodes
+4
+1 0 0 0
+2 1 0 0
+3 1 1 0
+4 0 1 0
+$EndNodes
+$Elements
+6
+1 1 2 1 1 1 2
+2 1 2 2 2 2 3
+3 1 2 3 3 3 4
+4 1 2 4 4 4 1
+5 2 2 1 1 1 2 3
+6 2 2 1 1 1 3 4
+$EndElements
+"#;
+
+        let msh = read_msh(msh_text.as_bytes()).expect("failed to parse");
+        let registry = msh.named_attribute_registry();
+        let mesh: SimplexMesh<2> = msh.into_2d().expect("expected 2D mesh");
+
+        let inlet = mesh
+            .face_ids_for_named_set(&registry, "inlet")
+            .expect("missing inlet");
+        let outlet = mesh
+            .face_ids_for_named_set(&registry, "outlet")
+            .expect("missing outlet");
+
+        let inlet_set: std::collections::HashSet<u32> = inlet.iter().copied().collect();
+        let outlet_set: std::collections::HashSet<u32> = outlet.iter().copied().collect();
+        let difference: std::collections::HashSet<u32> = inlet_set
+            .difference(&outlet_set)
+            .copied()
+            .collect();
+
+        // For this mesh, inlet \ outlet = inlet (since they don't intersect)
+        assert_eq!(difference.len(), inlet.len());
     }
 }

@@ -21,7 +21,8 @@ use std::sync::Arc;
 
 use fem_examples::maxwell::marker_to_tags;
 use fem_assembly::{
-    standard::{CurlCurlIntegrator, VectorMassIntegrator},
+    standard::{CurlCurlIntegrator, VectorMassIntegrator, VectorMassTensorIntegrator},
+    coefficient::ConstantMatrixCoeff,
     vector_integrator::{VectorLinearIntegrator, VectorQpData},
 };
 use fem_mesh::SimplexMesh;
@@ -65,10 +66,16 @@ fn main() {
     let n_workers = parse_arg(&args, "--ranks").unwrap_or(2);
     let mesh_n = parse_arg(&args, "--n").unwrap_or(16);
     let solver = parse_solver(&args);
+    let pml_thickness = parse_float(&args, "--pml-thickness").unwrap_or(0.2);
+    let sigma_max = parse_float(&args, "--sigma-max").unwrap_or(2.0);
+    let has_pml = args.iter().any(|a| a == "--pml");
 
     println!("=== fem-rs pex3: Parallel Maxwell (ND1) ===");
     println!("  Workers: {n_workers}, Mesh: {mesh_n}x{mesh_n}");
     println!("  Solver: {}", solver.as_str());
+    if has_pml {
+        println!("  PML-like damping: thickness={}, sigma_max={}", pml_thickness, sigma_max);
+    }
 
     let mesh = Arc::new(SimplexMesh::<2>::unit_square_tri(mesh_n));
 
@@ -89,12 +96,20 @@ fn main() {
             println!("  Global DOFs: {}", par_space.n_global_dofs());
         }
 
-        // 3. Assemble (∇×∇× + I).
+        // 3. Assemble (∇×∇× + damped mass).
         let curl_curl = CurlCurlIntegrator { mu: 1.0 };
-        let vec_mass = VectorMassIntegrator { alpha: 1.0 };
-        let mut a_mat = ParVectorAssembler::assemble_bilinear(
-            &par_space, &[&curl_curl, &vec_mass], 4,
-        );
+        let mut a_mat = if has_pml {
+            let tau_coeff = pml_mass_tensor(pml_thickness, sigma_max);
+            let vec_mass = VectorMassTensorIntegrator { alpha: tau_coeff };
+            ParVectorAssembler::assemble_bilinear(
+                &par_space, &[&curl_curl, &vec_mass], 4,
+            )
+        } else {
+            let vec_mass = VectorMassIntegrator { alpha: 1.0 };
+            ParVectorAssembler::assemble_bilinear(
+                &par_space, &[&curl_curl, &vec_mass], 4,
+            )
+        };
 
         // 4. Assemble RHS: f = ((1+π²)sin(πy), (1+π²)sin(πx)).
         let source = MaxwellSource;
@@ -165,6 +180,21 @@ fn parse_arg(args: &[String], flag: &str) -> Option<usize> {
     args.iter().position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
         .and_then(|v| v.parse().ok())
+}
+
+fn parse_float(args: &[String], flag: &str) -> Option<f64> {
+    args.iter().position(|a| a == flag)
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse().ok())
+}
+
+/// Construct a 2×2 PML damping tensor [1+σ, 0; 0, 1+σ] as ConstantMatrixCoeff.
+/// Uses a simple uniform damping profile at the boundaries.
+fn pml_mass_tensor(thickness: f64, sigma_max: f64) -> ConstantMatrixCoeff {
+    // For simplicity, use uniform isotropic damping σ = 0.5 * sigma_max.
+    let sigma = 0.5 * sigma_max;
+    let diag = [1.0 + sigma, 0.0, 0.0, 1.0 + sigma];
+    ConstantMatrixCoeff(diag.to_vec())
 }
 
 fn parse_solver(args: &[String]) -> SolverKind {

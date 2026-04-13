@@ -40,6 +40,11 @@ fn main() {
             args.pml_thickness, args.sigma_max, args.wx, args.wy
         );
     }
+    if args.multi_material {
+        println!(
+            "  Mode: Multi-material PML (4 regions with distinct coefficients)"
+        );
+    }
 
     println!("  Edge DOFs: {}", result.n_dofs);
     println!("  Boundary DOFs constrained: {}", result.n_boundary_dofs);
@@ -51,7 +56,7 @@ fn main() {
         println!("  h = {:.4e},  L² error = {:.4e}", result.h, err);
         println!("  (Expected O(h) for ND1 elements)");
     } else {
-        println!("  h = {:.4e},  L² error = n/a (PML-like modified operator)", result.h);
+        println!("  h = {:.4e},  L² error = n/a (PML-like/multi-material modified operator)", result.h);
     }
 }
 
@@ -82,6 +87,33 @@ fn axis_sigma_1d(coord: f64, lo: f64, hi: f64, thickness: f64, sigma_max: f64) -
     sigma_max * s * s
 }
 
+/// Compute anisotropic tensor [sx, 0; 0, sy] with region-dependent coefficients.
+/// Divides [0,1]² into 4 quadrants: Q1 (0.5,1)², Q2 (0,0.5)², Q3 (0,0.5)×(0.5,1), Q4 (0.5,1)×(0,0.5)
+/// Each quadrant gets a different (wx, wy) weight for tuned absorption.
+fn multi_material_pml_tensor(
+    x: &[f64],
+    thickness: f64,
+    sigma_max: f64,
+) -> [f64; 4] {
+    let (wx, wy) = if x[0] >= 0.5 && x[1] >= 0.5 {
+        // Q1: high damping (1.0, 1.2)
+        (1.0, 1.2)
+    } else if x[0] < 0.5 && x[1] >= 0.5 {
+        // Q3: moderate x, high y (0.8, 1.3)
+        (0.8, 1.3)
+    } else if x[0] < 0.5 && x[1] < 0.5 {
+        // Q2: moderate damping (0.9, 1.1)
+        (0.9, 1.1)
+    } else {
+        // Q4: high x, moderate y (1.2, 0.9)
+        (1.2, 0.9)
+    };
+
+    let sx = wx * axis_sigma_1d(x[0], 0.0, 1.0, thickness, sigma_max);
+    let sy = wy * axis_sigma_1d(x[1], 0.0, 1.0, thickness, sigma_max);
+    [1.0 + sx, 0.0, 0.0, 1.0 + sy]
+}
+
 fn solve_case(args: &Args) -> CaseResult {
     let mesh = SimplexMesh::<2>::unit_square_tri(args.n);
     let space = HCurlSpace::new(mesh, 1);
@@ -95,7 +127,13 @@ fn solve_case(args: &Args) -> CaseResult {
         .with_source_fn(source_value)
         .add_pec_zero_from_marker(&attrs, &ess_bdr);
 
-    builder = if args.pml_like {
+    builder = if args.multi_material {
+        let thickness = args.pml_thickness;
+        let sigma_max = args.sigma_max;
+        builder.with_anisotropic_matrix_fn(1.0, move |x| {
+            multi_material_pml_tensor(x, thickness, sigma_max)
+        })
+    } else if args.pml_like {
         let thickness = args.pml_thickness;
         let sigma_max = args.sigma_max;
         let wx = args.wx;
@@ -113,7 +151,7 @@ fn solve_case(args: &Args) -> CaseResult {
 
     let n_dofs = problem.n_dofs();
     let solved = problem.solve();
-    let l2_error = if args.pml_like {
+    let l2_error = if args.pml_like || args.multi_material {
         None
     } else {
         Some(l2_error_hcurl_exact(&solved.space, &solved.solution, |x| {
@@ -137,6 +175,7 @@ fn solve_case(args: &Args) -> CaseResult {
 struct Args {
     n: usize,
     pml_like: bool,
+    multi_material: bool,
     pml_thickness: f64,
     sigma_max: f64,
     wx: f64,
@@ -147,6 +186,7 @@ fn parse_args() -> Args {
     let mut a = Args {
         n: 16,
         pml_like: false,
+        multi_material: false,
         pml_thickness: 0.2,
         sigma_max: 2.0,
         wx: 1.0,
@@ -157,6 +197,7 @@ fn parse_args() -> Args {
         match arg.as_str() {
             "--n" => { a.n = it.next().unwrap_or("16".into()).parse().unwrap_or(16); }
             "--pml-like" => { a.pml_like = true; }
+            "--multi-material" => { a.multi_material = true; a.pml_like = false; }
             "--pml-thickness" => {
                 a.pml_thickness = it.next().unwrap_or("0.2".into()).parse().unwrap_or(0.2);
             }
@@ -180,6 +221,7 @@ mod tests {
         let result = solve_case(&Args {
             n: 8,
             pml_like: false,
+            multi_material: false,
             pml_thickness: 0.2,
             sigma_max: 2.0,
             wx: 1.0,
@@ -195,6 +237,7 @@ mod tests {
         let result = solve_case(&Args {
             n: 8,
             pml_like: true,
+            multi_material: false,
             pml_thickness: 0.2,
             sigma_max: 2.0,
             wx: 1.0,
@@ -204,5 +247,22 @@ mod tests {
         assert!(result.n_boundary_dofs > 0);
         assert!(result.final_residual < 1.0e-6, "residual = {}", result.final_residual);
         assert!(result.l2_error.is_none());
+    }
+
+    #[test]
+    fn ex3_multi_material_pml_mode_converges() {
+        let result = solve_case(&Args {
+            n: 8,
+            pml_like: false,
+            multi_material: true,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            wx: 1.0,
+            wy: 1.0,
+        });
+        assert!(result.converged, "multi-material PML should converge");
+        assert!(result.n_boundary_dofs > 0);
+        assert!(result.final_residual < 1.0e-6, "residual = {}", result.final_residual);
+        assert!(result.l2_error.is_none(), "multi-material mode should not compute L2 error");
     }
 }

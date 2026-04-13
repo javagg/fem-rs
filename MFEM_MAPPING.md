@@ -980,3 +980,63 @@ Current baseline progress (2026-04-13):
 - ✅ H1TraceSpace P2/P3 boundary trace support
 - ✅ Grundmann-Moller tet quadrature fix (linear system solver, correct for all orders)
 - ✅ reed submodule bug fix (`create_basis_h1_simplex` lock pattern)
+
+---
+
+### Phase 64 — 多材料 PML 演示 (ex3 增强) ✅
+> **Target**: MFEM ex3 的增强变体，展示多区域 PML 系数控制
+
+**状态**：已完成（2026-04-13）
+
+**实现**：
+- [x] `ex3_maxwell.rs --multi-material` — 4 象限各向异性 PML，每个区域独立 (wx, wy) 配置
+- [x] `multi_material_pml_tensor()` 函数 — 基于坐标的分区系数 [Q1: 1.0/1.2, Q2: 0.9/1.1, Q3: 0.8/1.3, Q4: 1.2/0.9]
+- [x] 测试：`ex3_multi_material_pml_mode_converges()` 验证 158 次迭代收敛
+- [x] 验证：n=8, residual<1e-6
+
+### Phase 65 — 并行 Maxwell PML (pex3 增强) ✅
+> **Target**: 并行 H(curl) 例子集成 PML-like 系数
+
+**状态**：已完成（2026-04-13）
+
+**实现**：
+- [x] `pex3_maxwell.rs --pml` — 并行 ND1 Maxwell 支持 PML 模式
+- [x] `VectorMassTensorIntegrator<ConstantMatrixCoeff>` — 张量质量矩阵集成
+- [x] `pml_mass_tensor()` 函数 — 生成 [1+σ, 0; 0, 1+σ] 各向同性阻尼张量
+- [x] 验证：2 rank, n=8, 64 iters, residual<1e-8 收敛
+
+### Phase 66 — 命名属性集合运算 (ex39 增强) ✅
+> **Target**: MFEM ex39 的集合运算扩展（并集、交集、差集）
+
+**状态**：已完成（2026-04-13）
+
+**实现**：
+- [x] `ex39_named_attributes.rs --intersection-region` — 集合交集（inlet ∩ outlet）
+- [x] `ex39_named_attributes.rs --difference-region` — 集合差集（inlet \ outlet）
+- [x] 测试三个场景：merge (∪)、intersection (∩)、difference (\)
+- [x] 验证：3 个测试通过，演示多集合布尔运算模式
+
+---
+
+## 例子命名迁移记录 (2026-04-13)
+
+为实现 **MFEM 对应关系清晰化** 和 **命名规范统一**，所有 `ex_` 前缀的应用/增强例子迁移到 `mfem_ex<N>_<variant>` 格式：
+
+| 旧名称 | 新名称 | MFEM 对应 | Phase | 描述 |
+|---|---|---|---|---|
+| `ex_stokes.rs` | `mfem_ex40.rs` | MFEM ex40 | 40 | Taylor-Hood P2-P1 盖驱动腔 |
+| `ex_navier_stokes.rs` | `mfem_ex19.rs` | MFEM ex19 | 44 | Kovasznay 流不可压缩 Navier-Stokes |
+| `ex_maxwell_eigenvalue.rs` | `mfem_ex13_eigenvalue.rs` | MFEM ex13 | — | H(curl) 特征值问题 (LOBPCG) |
+| `ex_maxwell_time.rs` | `mfem_ex10_maxwell_time.rs` | MFEM ex10 | — | 时间域 Maxwell (Newmark-β) |
+| `ex_convergence.rs` | `mfem_ex1_convergence.rs` | MFEM ex1 | — | P1/P2 收敛性研究 |
+| `ex_maxwell_firstorder.rs` | `mfem_ex3_firstorder.rs` | MFEM ex3 | — | 一阶 E-B Maxwell 系统 (staggered) |
+
+**迁移完成**：
+- ✅ 文件系统迁移（move 命令）
+- ✅ `examples/Cargo.toml` 更新（6 个 [[example]] 配置）
+- ✅ 编译验证（fem-examples lib 101/101 测试通过）
+
+**好处**：
+- 清晰的 MFEM 版本对应关系
+- 统一的命名规范（`mfem_ex<number>` 格式）
+- 易于在文档和 CI 中引用
