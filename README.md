@@ -32,20 +32,20 @@ fem-rs/
 |---------|-----|--------|-------|
 | `ex1_poisson` | −Δu = f | H¹ P1, PCG+Jacobi | O(h²) verified |
 | `ex2_elasticity` | −∇·σ = f | VectorH1 P1, PCG | Working |
-| `ex3_maxwell` | ∇×∇×E + E = f | H(curl) ND1/ND2, PCG+AMS | AMS preconditioner available |
+| `mfem_ex3` | ∇×∇×E + E = f | H(curl) ND1/ND2, PCG+AMS | AMS preconditioner available |
 | `ex4_darcy` | −∇·u = f, u = −κ∇p | H(div) RT0/RT1 + L², MINRES+ADS | ADS preconditioner available |
 | `ex5_mixed_darcy` | Saddle-point Darcy/Stokes | Block PGMRES | Working |
 | `ex7_neumann_mixed_bc` | −Δu = f, mixed BCs | H¹ P1, Neumann + Dirichlet | Working |
 | `ex9_dg_advection` | −Δu = f (DG) | SIP-DG P1, GMRES | O(h²) verified |
 | `ex10_heat_equation` | ∂u/∂t − Δu = 0 | SDIRK-2 + PCG | Working |
 | `ex10_wave_equation` | ∂²u/∂t² − Δu = 0 | Newmark-β + PCG | Working |
-| `ex13_eigenvalue` | Kx = λMx | LOBPCG | 1-D Laplacian eigenvalues verified |
+| `mfem_ex13` | Kx = λMx | LOBPCG | 1-D Laplacian eigenvalues verified |
 | `ex14_dc_current` | −∇·(σ∇φ) = 0 | H¹ P1, DC current distribution | Working |
 | `ex15_dg_amr` | −Δu = f (AMR+DG) | P1 + ZZ estimator + Dörfler | O(h²) with refinement |
 | `ex15_tet_nc_amr` | 3-D NC AMR | Tet4 NC refinement + hanging face constraints | Working |
 | `ex16_nonlinear_heat` | −∇·(κ(u)∇u) = f | Newton + GMRES | O(h²) verified |
-| `ex_convergence` | −Δu = f | P1/P2/P3 convergence sweep | O(h²)/O(h³)/O(h⁴) |
-| `ex_stokes` | Stokes lid-driven cavity | Taylor-Hood P2/P1 + Schur GMRES | Verified |
+| `mfem_ex1_convergence` | −Δu = f | P1/P2/P3 convergence sweep | O(h²)/O(h³)/O(h⁴) |
+| `mfem_ex40` | Stokes lid-driven cavity | Taylor-Hood P2/P1 + Schur GMRES | Verified |
 | `ex_navier_stokes` | Navier-Stokes (Kovasznay) | P2/P1 Oseen/Picard, Re=40 | Converged |
 
 ### Parallel Examples

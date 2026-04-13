@@ -22,8 +22,8 @@
 //!
 //! ## Usage
 //! ```
-//! cargo run --example ex_stokes
-//! cargo run --example ex_stokes -- --n 16 --nu 1.0
+//! cargo run --example mfem_ex40
+//! cargo run --example mfem_ex40 -- --n 16 --nu 1.0
 //! ```
 
 use fem_assembly::{

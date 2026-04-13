@@ -452,7 +452,7 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 
 | MFEM example | PDE | FEM space | fem-rs milestone |
 |---|---|---|---|
-| **ex3** (curl) | ∇×∇×**u** + **u** = **f** (Maxwell) | H(curl) Nédélec | ✅ `ex3_maxwell` O(h) |
+| **ex3** (curl) | ∇×∇×**u** + **u** = **f** (Maxwell) | H(curl) Nédélec | ✅ `mfem_ex3` O(h) |
 | **ex4** | −∇·(**u**) = f, **u** = −κ∇p (Darcy) | H(div) RT + L² | ✅ `ex4_darcy` H(div) RT0 grad-div MINRES |
 | **ex5** | Saddle-point Darcy/Stokes | H(div) × L² | ✅ `ex5_mixed_darcy` block PGMRES |
 | **ex22** | Time-harmonic Maxwell (complex coeff.) | H(curl) | Phase 7+ |
@@ -474,7 +474,7 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 | **ex4** (nonlinear) | −Δu + exp(u) = 0 | ✅ `NewtonSolver` |
 | **ex6** | AMR Poisson with ZZ estimator | ✅ `refine_marked()`, `ZZErrorEstimator` |
 | **ex15** | DG advection with AMR | ✅ `ex15_dg_amr` P1 + ZZ + Dörfler + refinement |
-| **ex19** | Incompressible Navier-Stokes | ✅ `ex_navier_stokes` (Kovasznay Re=40, Oseen/Picard) |
+| **ex19** | Incompressible Navier-Stokes | ✅ `mfem_ex19` (Kovasznay Re=40, Oseen/Picard) |
 
 ### Tier 5 — HPC & Parallel (Phase 10)
 
@@ -551,9 +551,9 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 | 38b | `io` | GMSH v2 ASCII + v4.1 binary reader (unified `read_msh_file()` entry point) | ✅ |
 | 39 | `parallel`+`examples` | pex2 (mixed Poisson), pex3 (Maxwell), pex5 (Darcy) parallel examples | ✅ |
 | 39b | `amg` | Chebyshev smoother (`SmootherType::Chebyshev`), F-cycle (`CycleType::F`) | ✅ |
-| 40 | `examples`+`assembly` | Taylor-Hood P2-P1 Stokes (`ex_stokes` lid-driven cavity) | ✅ |
+| 40 | `examples`+`assembly` | Taylor-Hood P2-P1 Stokes (`mfem_ex40` lid-driven cavity) | ✅ |
 | 42a | `mesh`+`space`+`io` | Mixed element mesh infrastructure (per-element types, variable DofManager, GMSH mixed read) | ✅ |
-| 44 | `assembly`+`examples` | VectorConvectionIntegrator + Navier-Stokes Oseen/Picard (`ex_navier_stokes`, Kovasznay Re=40) | ✅ |
+| 44 | `assembly`+`examples` | VectorConvectionIntegrator + Navier-Stokes Oseen/Picard (`mfem_ex19`, Kovasznay Re=40) | ✅ |
 | 42b | `assembly` | Quad4/Hex8 isoparametric Jacobian, `unit_square_quad`, Q1 Poisson verified | ✅ |
 | 45 | `wasm`+`e2e` | Browser E2E test: WASM Poisson solver verified via Playwright/Chromium | ✅ |
 | 46 | `mesh`+`linalg`+`solver`+`space`+`io` | Backlog: bounding_box, periodic mesh, DenseTensor, SLI, H1Trace, VTK reader, PrintLevel | ✅ |
@@ -845,8 +845,8 @@ Current baseline progress (2026-04-13):
 - [x] `ComplexLinearForm` — 实/虚 RHS 向量对
 - [x] `apply_dirichlet_complex()` — 复数 Dirichlet BC 消去（`ComplexSystem::apply_dirichlet`）
 - [x] `GMRES` on `BlockMatrix` — 通过 flatten 后 GMRES 路径求解
-- [x] `ex22_complex.rs` — 基线验证示例
-- [x] `ex25_pml.rs` — PML-like complex Helmholtz 基线示例
+- [x] `mfem_ex22.rs` — 基线验证示例
+- [x] `mfem_ex25.rs` — PML-like complex Helmholtz 基线示例
 
 ---
 
@@ -963,9 +963,9 @@ Current baseline progress (2026-04-13):
 **实现**：
 - [x] `PmlCoeff` — 标量层吸收系数（边界层衰减）
 - [x] `PmlTensorCoeff` — 对角张量 PML 接口
-- [x] `ex25_pml.rs` — complex Helmholtz PML 基础示例
-- [x] `ex3_maxwell.rs --pml-like` — H(curl) 各向异性 PML-like 阻尼（wx/wy 控制）
-- [x] `ex34_absorbing_maxwell.rs --anisotropic` — 各向异性吸收边界（gamma_x/gamma_y 控制）
+- [x] `mfem_ex25.rs` — complex Helmholtz PML 基础示例
+- [x] `mfem_ex3 --pml-like` — H(curl) 各向异性 PML-like 阻尼（wx/wy 控制）
+- [x] `mfem_ex34 --anisotropic` — 各向异性吸收边界（gamma_x/gamma_y 控制）
 - [x] alignment-smoke CI：electromagnetic-pml、electromagnetic-absorbing 两 suite
 
 ### Phase 48 — linger Update + Higher-Order Elements ✅
@@ -989,7 +989,7 @@ Current baseline progress (2026-04-13):
 **状态**：已完成（2026-04-13）
 
 **实现**：
-- [x] `ex3_maxwell.rs --multi-material` — 4 象限各向异性 PML，每个区域独立 (wx, wy) 配置
+- [x] `mfem_ex3 --multi-material` — 4 象限各向异性 PML，每个区域独立 (wx, wy) 配置
 - [x] `multi_material_pml_tensor()` 函数 — 基于坐标的分区系数 [Q1: 1.0/1.2, Q2: 0.9/1.1, Q3: 0.8/1.3, Q4: 1.2/0.9]
 - [x] 测试：`ex3_multi_material_pml_mode_converges()` 验证 158 次迭代收敛
 - [x] 验证：n=8, residual<1e-6

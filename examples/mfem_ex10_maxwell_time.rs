@@ -26,9 +26,9 @@
 //!
 //! ## Usage
 //! ```
-//! cargo run --example ex_maxwell_time
-//! cargo run --example ex_maxwell_time -- --n 16 --dt 0.01 --t-end 1.0
-//! cargo run --example ex_maxwell_time -- --n 8 --dt 0.05 --sigma 0.1
+//! cargo run --example mfem_ex10_maxwell_time
+//! cargo run --example mfem_ex10_maxwell_time -- --n 16 --dt 0.01 --t-end 1.0
+//! cargo run --example mfem_ex10_maxwell_time -- --n 8 --dt 0.05 --sigma 0.1
 //! ```
 
 use std::f64::consts::PI;

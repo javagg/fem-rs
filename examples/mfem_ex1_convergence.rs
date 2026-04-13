@@ -23,9 +23,9 @@
 //!
 //! ## Usage
 //! ```
-//! cargo run --example ex_convergence
-//! cargo run --example ex_convergence -- --max-n 64
-//! cargo run --example ex_convergence -- --levels 6
+//! cargo run --example mfem_ex1_convergence
+//! cargo run --example mfem_ex1_convergence -- --max-n 64
+//! cargo run --example mfem_ex1_convergence -- --levels 6
 //! ```
 
 use std::f64::consts::PI;

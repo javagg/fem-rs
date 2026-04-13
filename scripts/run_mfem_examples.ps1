@@ -28,22 +28,18 @@ $mfemExamples = @(
 $coreExamples = @(
     "ex1_poisson",
     "ex2_elasticity",
-    "ex3_maxwell",
     "ex4_darcy",
     "ex5_mixed_darcy",
     "ex7_neumann_mixed_bc",
     "ex9_dg_advection",
     "ex10_heat_equation",
     "ex10_wave_equation",
-    "ex13_eigenvalue",
     "ex14_dc_current",
     "ex39_named_attributes",
     "ex15_dg_amr",
     "ex15_tet_nc_amr",
     "ex16_nonlinear_heat",
-    "ex26_geom_mg",
-    "ex_stokes",
-    "ex_navier_stokes"
+    "ex26_geom_mg"
 )
 
 $runList = @()

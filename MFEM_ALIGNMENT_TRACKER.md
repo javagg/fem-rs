@@ -132,8 +132,8 @@
 - 新增 `.github/workflows/alignment-smoke.yml`：对以下能力提供 PR 自动 smoke gate：
   1. `ComplexCoeff` / `ComplexVectorCoeff`（`fem-assembly`）
   2. `NamedAttributeSet` / `NamedAttributeRegistry`（`fem-mesh`）
-  3. 电磁 PML-like 路径（`ex3_maxwell --pml-like`）
-  4. 各向异性吸收边界路径（`ex34_absorbing_maxwell --anisotropic`）
+  3. 电磁 PML-like 路径（`mfem_ex3 --pml-like`）
+  4. 各向异性吸收边界路径（`mfem_ex34 --anisotropic`）
   5. canonical backend-resource contract（`fem-ceed`）
 - 新增 `.github/workflows/backend-feature-matrix.yml`：对 `vendor/reed` backend contract 在 `baseline/hypre-rs/petsc-rs/mumps/mkl` feature profile 下执行矩阵化测试。
 
@@ -150,7 +150,7 @@
 
 验收证据（2026-04-12）：
 - Builder/统一入口能力与回归：`cargo test -p fem-examples --lib` 全量通过（含 `boundary_material_frequency_matrix_regression_smoke`、`builder_mixed_boundary_matches_low_level_pipeline`、`builder_anisotropic_diag_matches_anisotropic_matrix_fn_diagonal` 等）。
-- 示例链路稳定性：`cargo test -p fem-examples --example ex3_maxwell --example ex31_maxwell --example ex32_impedance_maxwell --example ex33_tangential_drive_maxwell --example ex34_absorbing_maxwell` 全部通过。
+- 示例链路稳定性：`cargo test -p fem-examples --example mfem_ex3 --example mfem_ex31 --example mfem_ex32 --example ex33_tangential_drive_maxwell --example mfem_ex34` 全部通过。
 
 ### 4.2 一阶全波 Maxwell solver
 

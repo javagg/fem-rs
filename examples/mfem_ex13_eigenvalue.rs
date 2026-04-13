@@ -38,9 +38,9 @@
 //!
 //! ## Usage
 //! ```
-//! cargo run --example ex_maxwell_eigenvalue
-//! cargo run --example ex_maxwell_eigenvalue -- --n 16 --k 4
-//! cargo run --example ex_maxwell_eigenvalue -- --n 8 --k 3
+//! cargo run --example mfem_ex13_eigenvalue
+//! cargo run --example mfem_ex13_eigenvalue -- --n 16 --k 4
+//! cargo run --example mfem_ex13_eigenvalue -- --n 8 --k 3
 //! ```
 
 use std::f64::consts::PI;

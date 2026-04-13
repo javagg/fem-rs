@@ -57,10 +57,6 @@ name = "debug_interp"
 path = "debug_interp.rs"
 
 [[example]]
-name = "ex3_maxwell"
-path = "ex3_maxwell.rs"
-
-[[example]]
 name = "ex3_hex8_maxwell"
 path = "ex3_hex8_maxwell.rs"
 
@@ -75,10 +71,6 @@ path = "ex10_heat_equation.rs"
 [[example]]
 name = "ex10_wave_equation"
 path = "ex10_wave_equation.rs"
-
-[[example]]
-name = "ex13_eigenvalue"
-path = "ex13_eigenvalue.rs"
 
 [[example]]
 name = "ex4_darcy"
@@ -141,20 +133,8 @@ name = "mfem_ex10_maxwell_time"
 path = "mfem_ex10_maxwell_time.rs"
 
 [[example]]
-name = "ex31_maxwell"
-path = "ex31_maxwell.rs"
-
-[[example]]
-name = "ex32_impedance_maxwell"
-path = "ex32_impedance_maxwell.rs"
-
-[[example]]
 name = "ex33_tangential_drive_maxwell"
 path = "ex33_tangential_drive_maxwell.rs"
-
-[[example]]
-name = "ex34_absorbing_maxwell"
-path = "ex34_absorbing_maxwell.rs"
 
 [[example]]
 name = "ex39_named_attributes"
@@ -175,14 +155,6 @@ path = "pex4_parallel_heat.rs"
 [[example]]
 name = "mfem_ex1_convergence"
 path = "mfem_ex1_convergence.rs"
-
-[[example]]
-name = "ex22_complex"
-path = "ex22_complex.rs"
-
-[[example]]
-name = "ex25_pml"
-path = "ex25_pml.rs"
 
 [[example]]
 name = "ex26_geom_mg"

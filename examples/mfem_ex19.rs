@@ -23,8 +23,8 @@
 //!
 //! ## Usage
 //! ```
-//! cargo run --example ex_navier_stokes
-//! cargo run --example ex_navier_stokes -- --n 16 --re 40
+//! cargo run --example mfem_ex19
+//! cargo run --example mfem_ex19 -- --n 16 --re 40
 //! ```
 
 use std::f64::consts::PI;
