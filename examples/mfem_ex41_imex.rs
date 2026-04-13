@@ -1,4 +1,4 @@
-//! ex41_imex - FEM advection-diffusion with IMEX time integration.
+//! mfem_ex41_imex - FEM advection-diffusion with IMEX time integration.
 //!
 //! Semi-discrete model on H1 space:
 //!   M du/dt + C u + K u = 0
@@ -74,7 +74,7 @@ impl ImexOperator for AdvectionDiffusionSplit {
 fn main() {
     let args = parse_args();
 
-    println!("=== ex41_imex: FEM advection-diffusion with IMEX ===");
+    println!("=== mfem_ex41_imex: FEM advection-diffusion with IMEX ===");
     println!("  mesh n={}, dt={}, T={}", args.n, args.dt, args.t_end);
     println!("  kappa={}, velocity=({}, {})", args.kappa, args.vx, args.vy);
 
@@ -267,3 +267,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

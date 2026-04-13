@@ -1,4 +1,4 @@
-//! # Example 2 — Linear Elasticity  (analogous to MFEM ex2)
+//! # Example 2 �?Linear Elasticity  (analogous to MFEM ex2)
 //!
 //! Solves the linear elasticity system with a body force (gravity):
 //!
@@ -14,8 +14,8 @@
 //!
 //! ## Usage
 //! ```
-//! cargo run --example ex2_elasticity
-//! cargo run --example ex2_elasticity -- --n 16 --order 2
+//! cargo run --example mfem_ex2_elasticity
+//! cargo run --example mfem_ex2_elasticity -- --n 16 --order 2
 //! ```
 
 use fem_assembly::{
@@ -51,12 +51,12 @@ fn main() {
     let elast = ElasticityIntegrator { lambda: lam, mu };
     let mut mat = Assembler::assemble_bilinear(&space, &[&elast], args.order as u8 * 2 + 1);
 
-    // ─── 3. Gravity body force: f = (0, -ρg)  → assembled into RHS ───────────
+    // ─── 3. Gravity body force: f = (0, -ρg)  �?assembled into RHS ───────────
     //  Body force in x: 0,  in y: -1
     //  VectorH1Space DOF layout: [u_x DOFs | u_y DOFs]
     //  DomainSourceIntegrator works on scalar spaces; handle manually.
     let mut rhs = vec![0.0_f64; n];
-    // For the y-component load, we need ∫ (-1) v_y dx for each y-DOF.
+    // For the y-component load, we need �?(-1) v_y dx for each y-DOF.
     // In block DOF ordering, y-DOFs start at offset n_scalar.
     // Assemble a scalar mass-times-one over a temporary scalar space:
     {
@@ -119,3 +119,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

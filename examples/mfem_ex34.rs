@@ -1,10 +1,10 @@
-//! # Example 34 — Maxwell with first-order absorbing boundary condition
+//! # Example 34 �?Maxwell with first-order absorbing boundary condition
 //!
 //! Solves the 2-D H(curl) problem
 //!
 //! ```text
 //!   curl curl E + E = f          in Ω = [0,1]²
-//!   curl E + γ_abs (n×E) = g     on ∂Ω
+//!   curl E + γ_abs (n×E) = g     on ∂�?
 //! ```
 //!
 //! interpreted as a first-order absorbing boundary closure with normalised

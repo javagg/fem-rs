@@ -1,10 +1,10 @@
-//! # Example 4 — Darcy flow / grad-div problem  (analogous to MFEM ex4)
+//! # Example 4 �?Darcy flow / grad-div problem  (analogous to MFEM ex4)
 //!
 //! Solves the H(div) grad-div problem on the unit square:
 //!
 //! ```text
 //!   −∇(α ∇·F) + β F = f    in Ω = [0,1]²
-//!                F·n = 0    on ∂Ω
+//!                F·n = 0    on ∂�?
 //! ```
 //!
 //! using lowest-order Raviart-Thomas (RT0) elements.
@@ -29,9 +29,9 @@
 //!
 //! ## Usage
 //! ```
-//! cargo run --example ex4_darcy
-//! cargo run --example ex4_darcy -- --n 16
-//! cargo run --example ex4_darcy -- --n 32
+//! cargo run --example mfem_ex4_darcy
+//! cargo run --example mfem_ex4_darcy -- --n 16
+//! cargo run --example mfem_ex4_darcy -- --n 32
 //! ```
 
 use std::f64::consts::PI;
@@ -71,7 +71,7 @@ fn main() {
     // ─── 3. Assemble RHS: (f, G) ────────────────────────────────────────────
     //
     // Manufactured solution: F = (sin(πx)cos(πy), −cos(πx)sin(πy))
-    // ∇·F = π cos(πx)cos(πy) − π cos(πx)cos(πy) = 0
+    // ∇·F = π cos(πx)cos(πy) �?π cos(πx)cos(πy) = 0
     //
     // For −∇(α∇·F) + βF = f  with ∇·F = 0:
     //   f = β F = β (sin(πx)cos(πy), −cos(πx)sin(πy))
@@ -102,7 +102,7 @@ fn main() {
     let h = 1.0 / args.n as f64;
     println!("  h = {h:.4e}");
     println!("  ‖∇·F_h‖_L² = {div_l2:.4e}  (should be ~0 for div-free solution)");
-    println!("  ‖F_h − F_exact‖_approx = {flux_l2:.4e}");
+    println!("  ‖F_h �?F_exact‖_approx = {flux_l2:.4e}");
 
     // ─── 6. Report solution statistics ───────────────────────────────────────
     let u_max: f64 = u.iter().cloned().fold(0.0_f64, |a, b| a.max(b.abs()));
@@ -140,7 +140,7 @@ fn compute_errors<S: FESpace>(space: &S, uh: &[f64]) -> (f64, f64) {
         let signs = space.element_signs(e);
 
         // ─ Compute divergence (constant per element for RT0) ─
-        // For RT0 on a triangle, div(φᵢ) = 1/|K| (constant).
+        // For RT0 on a triangle, div(φ�? = 1/|K| (constant).
         // After Piola transform, div_phys = div_ref / det_J.
         // The RT0 reference divergences are all 2.0 (for the standard reference).
         // Physical div = sign_i * 2.0 / det_j  (per DOF).
@@ -162,9 +162,9 @@ fn compute_errors<S: FESpace>(space: &S, uh: &[f64]) -> (f64, f64) {
 
         // Evaluate F_h at centroid using RT0 basis (Piola-transformed).
         // Reference centroid: ξ = (1/3, 1/3)
-        // RT0 reference basis at (ξ₁, ξ₂):
-        //   φ₀ = (ξ₁, ξ₂ − 1),  φ₁ = (ξ₁, ξ₂),  φ₂ = (ξ₁ − 1, ξ₂)
-        // Wait — the actual ordering depends on the reference element impl.
+        // RT0 reference basis at (ξ�? ξ�?:
+        //   φ₀ = (ξ�? ξ�?�?1),  φ�?= (ξ�? ξ�?,  φ�?= (ξ�?�?1, ξ�?
+        // Wait �?the actual ordering depends on the reference element impl.
         // For a simpler approach, just report the divergence error.
         // The flux error is harder without direct basis evaluation access.
         let _ = exact_x;
@@ -194,3 +194,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

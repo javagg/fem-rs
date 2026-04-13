@@ -1,4 +1,4 @@
-//! # Example 10 — Wave Equation (Newmark-beta)
+//! # Example 10 �?Wave Equation (Newmark-beta)
 //!
 //! Solve the wave equation on the unit square [0,1]^2:
 //!   d^2 u/dt^2 - c^2 Delta u = 0
@@ -13,8 +13,8 @@
 //!
 //! ## Usage
 //! ```
-//! cargo run --example ex10_wave_equation
-//! cargo run --example ex10_wave_equation -- --n 32 --dt 0.0005 --T 1.0
+//! cargo run --example mfem_ex10_wave_equation
+//! cargo run --example mfem_ex10_wave_equation -- --n 32 --dt 0.0005 --T 1.0
 //! ```
 
 use std::f64::consts::PI;
@@ -139,3 +139,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

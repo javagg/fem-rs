@@ -1,4 +1,4 @@
-//! # Example 8 — Static Condensation baseline (toward MFEM ex8/hybr)
+//! # Example 8 �?Static Condensation baseline (toward MFEM ex8/hybr)
 //!
 //! This example demonstrates the algebraic static-condensation primitive used by
 //! fem-rs non-conforming constraints:

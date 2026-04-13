@@ -3,7 +3,7 @@
 //! Solves the steady Stokes equations on a lid-driven cavity:
 //!
 //! ```text
-//!   −ν Δu + ∇p = 0    in Ω = [0,1]²
+//!   −�?Δu + ∇p = 0    in Ω = [0,1]²
 //!        ∇·u = 0    in Ω
 //!          u = (1,0)  on top wall   (lid, tag 3)
 //!          u = (0,0)  on other walls (tags 1,2,4)
@@ -56,9 +56,9 @@ fn main() {
     println!("  pressure DOFs: {np}");
 
     // ─── 2. Assemble blocks ──────────────────────────────────────────────────
-    let quad_order = 5_u8; // P2 gradients need ≥ order 3
+    let quad_order = 5_u8; // P2 gradients need �?order 3
 
-    // A = ν ∫ ∇uᵢ·∇vᵢ dx  (vector Laplacian)
+    // A = ν �?∇uᵢ·∇v�?dx  (vector Laplacian)
     let visc = VectorDiffusionIntegrator { kappa: args.nu };
     let mut a_mat = Assembler::assemble_bilinear(&space_u, &[&visc], quad_order);
 
@@ -147,10 +147,10 @@ fn main() {
     sys.apply(&u_sol, &p_sol, &mut ru, &mut rp);
     let err_u: f64 = ru.iter().zip(f_u.iter()).map(|(a, b)| (a - b).powi(2)).sum::<f64>().sqrt();
     let err_p: f64 = rp.iter().zip(g_p.iter()).map(|(a, b)| (a - b).powi(2)).sum::<f64>().sqrt();
-    println!("  Block residual: ‖Au+B^Tp−f‖ = {err_u:.3e},  ‖Bu−g‖ = {err_p:.3e}");
+    println!("  Block residual: ‖Au+B^Tp−f�?= {err_u:.3e},  ‖Bu−g�?= {err_p:.3e}");
 
     // Divergence check: ||Bu|| should be small (incompressibility)
-    println!("  Divergence: ‖∇·u‖ = {err_p:.3e}");
+    println!("  Divergence: ‖∇·u�?= {err_p:.3e}");
 
     println!("\nDone.");
 }
@@ -192,3 +192,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

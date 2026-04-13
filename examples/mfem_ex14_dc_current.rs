@@ -1,21 +1,21 @@
-//! # Example 14 — DC current flow in a two-material conductor
+//! # Example 14 �?DC current flow in a two-material conductor
 //!
 //! Solves the electrostatic potential equation with piecewise constant
 //! conductivity (two-material domain), analogous to MFEM ex14 (DC current):
 //!
 //! ```text
-//!   −∇·(σ ∇φ) = 0    in Ω = [0,1]²
+//!   −∇·(σ ∇�? = 0    in Ω = [0,1]²
 //!           φ = 0    on Γ_left  (x=0, tag 4)
 //!           φ = 1    on Γ_right (x=1, tag 2)
-//!    σ ∂φ/∂n = 0    on Γ_top, Γ_bottom (insulated, tags 1,3) [natural BC]
+//!    σ ∂�?∂n = 0    on Γ_top, Γ_bottom (insulated, tags 1,3) [natural BC]
 //! ```
 //!
 //! The domain is split into two materials:
-//!   - Left half  (x ≤ 0.5): σ₁ = 1.0  (low conductivity, tag 1 in elems)
-//!   - Right half (x  > 0.5): σ₂ = 10.0 (high conductivity, tag 2 in elems)
+//!   - Left half  (x �?0.5): σ�?= 1.0  (low conductivity, tag 1 in elems)
+//!   - Right half (x  > 0.5): σ�?= 10.0 (high conductivity, tag 2 in elems)
 //!
 //! Since the mesh does not align with the interface, we use `FnCoeff` to
-//! assign σ(x) = σ₁ for x[0] ≤ 0.5 and σ₂ otherwise, and `PWConstCoeff`
+//! assign σ(x) = σ�?for x[0] �?0.5 and σ�?otherwise, and `PWConstCoeff`
 //! to demonstrate the tag-based approach on the same problem.
 //!
 //! Post-processing: compute the element-wise electric field E = −∇φ
@@ -24,16 +24,16 @@
 //! ## Physics
 //! For a 1D cross-section (two layers in series), the exact solution is:
 //! ```text
-//!   φ(x) = { σ₂/(σ₁+σ₂) * (2x)           for x ≤ 0.5
-//!           { 1 - σ₁/(σ₁+σ₂) * 2(1-x)     for x > 0.5
+//!   φ(x) = { σ�?(σ�?σ�? * (2x)           for x �?0.5
+//!           { 1 - σ�?(σ�?σ�? * 2(1-x)     for x > 0.5
 //! ```
-//! The normal current J·n = σ ∂φ/∂x is continuous at x=0.5 (conservation).
+//! The normal current J·n = σ ∂�?∂x is continuous at x=0.5 (conservation).
 //!
 //! ## Usage
 //! ```
-//! cargo run --example ex14_dc_current
-//! cargo run --example ex14_dc_current -- --n 32 --sigma1 1.0 --sigma2 100.0
-//! cargo run --example ex14_dc_current -- --n 16 --vtk output.vtu
+//! cargo run --example mfem_ex14_dc_current
+//! cargo run --example mfem_ex14_dc_current -- --n 32 --sigma1 1.0 --sigma2 100.0
+//! cargo run --example mfem_ex14_dc_current -- --n 16 --vtk output.vtu
 //! ```
 
 use fem_assembly::postprocess::compute_element_gradients;
@@ -53,7 +53,7 @@ fn main() {
     println!("=== fem-rs Example 14: DC current flow (two-material conductor) ===");
     println!("  Mesh: {}×{}, P1 elements", args.n, args.n);
     println!(
-        "  σ₁ = {} (x ≤ 0.5),  σ₂ = {} (x > 0.5)",
+        "  σ�?= {} (x �?0.5),  σ�?= {} (x > 0.5)",
         args.sigma1, args.sigma2
     );
     println!("  BCs: φ=0 on left (tag 4),  φ=1 on right (tag 2)");
@@ -70,10 +70,10 @@ fn main() {
 
     // ─── 2. Piecewise conductivity σ(x) ─────────────────────────────────────
     //   FnCoeff: σ is a closure over the physical coordinate x[0].
-    //   No mesh tag needed — just the coordinate decides the material.
+    //   No mesh tag needed �?just the coordinate decides the material.
     let sigma_fn = FnCoeff(move |x: &[f64]| if x[0] <= 0.5 { sigma1 } else { sigma2 });
 
-    // ─── 3. Assemble −∇·(σ ∇φ) bilinear form ────────────────────────────────
+    // ─── 3. Assemble −∇·(σ ∇�? bilinear form ────────────────────────────────
     let mut mat =
         Assembler::assemble_bilinear(&space, &[&DiffusionIntegrator { kappa: sigma_fn }], 3);
 
@@ -115,11 +115,11 @@ fn main() {
     );
 
     // ─── 7. Post-processing ───────────────────────────────────────────────────
-    // Electric field E = -∇φ (element-wise, at centroid)
+    // Electric field E = -∇�?(element-wise, at centroid)
     let grads = compute_element_gradients(&space, &phi);
     let n_elems = space.mesh().n_elements();
 
-    // Current density J = σ E = -σ ∇φ (element-wise)
+    // Current density J = σ E = -σ ∇�?(element-wise)
     let mut j_field = vec![0.0_f64; n_elems * 2];
     let mut e_field = vec![0.0_f64; n_elems * 2];
     for e in 0..n_elems {
@@ -140,7 +140,7 @@ fn main() {
 
     // ─── 8. 1D analytical check along y = 0.5 ────────────────────────────────
     // For the 1D layered problem the exact potential at the interface (x=0.5) is:
-    //   φ(0.5) = σ₂ / (σ₁ + σ₂)
+    //   φ(0.5) = σ�?/ (σ�?+ σ�?
     let phi_interface_exact = sigma2 / (sigma1 + sigma2);
     // Find the node closest to (0.5, 0.5) and compare.
     let mut best_dist = f64::MAX;
@@ -161,7 +161,7 @@ fn main() {
         node_xy[0], node_xy[1]
     );
     println!(
-        "    φ_h ≈ {:.6},  φ_exact(0.5) = {:.6},  diff = {:.2e}",
+        "    φ_h �?{:.6},  φ_exact(0.5) = {:.6},  diff = {:.2e}",
         phi_at_interface,
         phi_interface_exact,
         (phi_at_interface - phi_interface_exact).abs()
@@ -230,3 +230,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

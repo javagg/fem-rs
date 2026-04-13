@@ -1,10 +1,10 @@
-//! # Example 22 — Complex-Valued Time-Harmonic Helmholtz (analogous to MFEM ex22)
+//! # Example 22 �?Complex-Valued Time-Harmonic Helmholtz (analogous to MFEM ex22)
 //!
 //! Solves a damped time-harmonic scalar Helmholtz equation using the
 //! **2×2 real-block** strategy in `fem_assembly::complex`:
 //!
 //! ```text
-//!   −∇·(a∇u) − ω²b·u + iω·c·u = 0    in Ω = [0,1]²
+//!   −∇·(a∇u) �?ω²b·u + iω·c·u = 0    in Ω = [0,1]²
 //! ```
 //!
 //! with Dirichlet BCs:
@@ -13,7 +13,7 @@
 //!
 //! The 2×2 real block system is:
 //! ```text
-//! [ K − ω²M   −ωC ] [ u_re ]   [ 0 ]
+//! [ K �?ω²M   −ωC ] [ u_re ]   [ 0 ]
 //! [ ωC        K−ω²M] [ u_im ] = [ 0 ]
 //! ```
 //! Solved with GMRES.
@@ -234,7 +234,7 @@ fn main() {
         "  GMRES: {} iters, residual = {:.3e}, converged = {}",
         result.iterations, result.final_residual, result.converged
     );
-    println!("  |u| ∈ [{:.4}, {:.4}]", result.min_amp, result.max_amp);
+    println!("  |u| �?[{:.4}, {:.4}]", result.min_amp, result.max_amp);
     println!(
         "  |u| mean: left={:.4e}, right={:.4e}, interior={:.4e}",
         result.mean_left_amp, result.mean_right_amp, result.mean_interior_amp
@@ -247,7 +247,7 @@ fn main() {
 
     assert!(result.max_left_bc_err < 1e-10, "left Dirichlet BC not satisfied");
     assert!(result.converged, "GMRES did not converge");
-    println!("  ✓ Example 22 passed");
+    println!("  �?Example 22 passed");
 }
 
 #[cfg(test)]
@@ -290,3 +290,4 @@ mod tests {
         );
     }
 }
+

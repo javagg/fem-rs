@@ -53,8 +53,8 @@ jobs:
           } elseif ("${{ matrix.suite }}" -eq "named-attrs-io") {
             cargo test -p fem-io physical_names_to_named_attribute_registry_2d -- --nocapture
             cargo test -p fem-io physical_names_same_name_across_dims_are_merged -- --nocapture
-            cargo run -p fem-examples --example ex39_named_attributes --quiet
-            cargo run -p fem-examples --example ex26_geom_mg --quiet
+            cargo run -p fem-examples --example mfem_ex39_named_attributes --quiet
+            cargo run -p fem-examples --example mfem_ex26_geom_mg --quiet
           } elseif ("${{ matrix.suite }}" -eq "electromagnetic-pml") {
             cargo run -p fem-examples --example mfem_ex3 --quiet -- --pml-like --pml-thickness 0.2 --sigma-max 2.0 --wx 1.0 --wy 1.5
           } elseif ("${{ matrix.suite }}" -eq "electromagnetic-absorbing") {

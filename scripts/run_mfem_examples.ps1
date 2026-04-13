@@ -26,20 +26,20 @@ $mfemExamples = @(
 )
 
 $coreExamples = @(
-    "ex1_poisson",
-    "ex2_elasticity",
-    "ex4_darcy",
-    "ex5_mixed_darcy",
-    "ex7_neumann_mixed_bc",
-    "ex9_dg_advection",
-    "ex10_heat_equation",
-    "ex10_wave_equation",
-    "ex14_dc_current",
-    "ex39_named_attributes",
-    "ex15_dg_amr",
-    "ex15_tet_nc_amr",
-    "ex16_nonlinear_heat",
-    "ex26_geom_mg"
+    "mfem_ex1_poisson",
+    "mfem_ex2_elasticity",
+    "mfem_ex4_darcy",
+    "mfem_ex5_mixed_darcy",
+    "mfem_ex7_neumann_mixed_bc",
+    "mfem_ex9_dg_advection",
+    "mfem_ex10_heat_equation",
+    "mfem_ex10_wave_equation",
+    "mfem_ex14_dc_current",
+    "mfem_ex39_named_attributes",
+    "mfem_ex15_dg_amr",
+    "mfem_ex15_tet_nc_amr",
+    "mfem_ex16_nonlinear_heat",
+    "mfem_ex26_geom_mg"
 )
 
 $runList = @()
@@ -86,3 +86,4 @@ if ($failed.Count -gt 0) {
 Write-Host "Failed: 0"
 Write-Host "All requested examples passed."
 exit 0
+

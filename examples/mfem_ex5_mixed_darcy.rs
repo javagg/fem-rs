@@ -1,4 +1,4 @@
-//! # Example 5 — Block saddle-point system  (analogous to MFEM ex5)
+//! # Example 5 �?Block saddle-point system  (analogous to MFEM ex5)
 //!
 //! Demonstrates the block system infrastructure by solving a saddle-point
 //! problem via the Uzawa (Schur complement) solver.
@@ -14,8 +14,8 @@
 //!
 //! ## Usage
 //! ```
-//! cargo run --example ex5_mixed_darcy
-//! cargo run --example ex5_mixed_darcy -- --n 16
+//! cargo run --example mfem_ex5_mixed_darcy
+//! cargo run --example mfem_ex5_mixed_darcy -- --n 16
 //! ```
 
 use std::f64::consts::PI;
@@ -102,7 +102,7 @@ fn main() {
     sys.apply(&u_sol, &p_sol, &mut ru, &mut rp);
     let err_u: f64 = ru.iter().zip(f_u.iter()).map(|(a, b)| (a - b).powi(2)).sum::<f64>().sqrt();
     let err_p: f64 = rp.iter().zip(g.iter()).map(|(a, b)| (a - b).powi(2)).sum::<f64>().sqrt();
-    println!("  Block residual: ‖Au+Bᵀp−f‖ = {err_u:.3e},  ‖Bu+Cp−g‖ = {err_p:.3e}");
+    println!("  Block residual: ‖Au+Bᵀp−f�?= {err_u:.3e},  ‖Bu+Cp−g�?= {err_p:.3e}");
 
     println!("\nDone.");
 }
@@ -119,3 +119,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

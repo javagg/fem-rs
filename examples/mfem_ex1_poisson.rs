@@ -1,10 +1,10 @@
-//! # Example 1 — Poisson/Laplace  (analogous to MFEM ex1)
+//! # Example 1 �?Poisson/Laplace  (analogous to MFEM ex1)
 //!
 //! Solves the scalar Poisson equation with homogeneous Dirichlet boundary conditions:
 //!
 //! ```text
 //!   −∇·(κ ∇u) = f    in Ω = [0,1]²
-//!            u = 0    on ∂Ω
+//!            u = 0    on ∂�?
 //! ```
 //!
 //! with the manufactured solution  `u(x,y) = sin(π x) sin(π y)`,  which gives
@@ -12,11 +12,11 @@
 //!
 //! ## Usage
 //! ```
-//! cargo run --example ex1_poisson
-//! cargo run --example ex1_poisson -- --order 2 --n 32
-//! cargo run --example ex1_poisson -- --n 8   # observe h² convergence
-//! cargo run --example ex1_poisson -- --n 16
-//! cargo run --example ex1_poisson -- --n 32
+//! cargo run --example mfem_ex1_poisson
+//! cargo run --example mfem_ex1_poisson -- --order 2 --n 32
+//! cargo run --example mfem_ex1_poisson -- --n 8   # observe h² convergence
+//! cargo run --example mfem_ex1_poisson -- --n 16
+//! cargo run --example mfem_ex1_poisson -- --n 32
 //! ```
 //!
 //! ## Output
@@ -52,11 +52,11 @@ fn main() {
     let n = space.n_dofs();
     println!("  DOFs:  {n}");
 
-    // ─── 3. Assemble bilinear form A = ∫ ∇u·∇v dx ───────────────────────────
+    // ─── 3. Assemble bilinear form A = �?∇u·∇v dx ───────────────────────────
     let diffusion = DiffusionIntegrator { kappa: 1.0 };
     let mut mat = Assembler::assemble_bilinear(&space, &[&diffusion], args.order as u8 * 2 + 1);
 
-    // ─── 4. Assemble linear form f = ∫ 2π² sin(πx)sin(πy) v dx ─────────────
+    // ─── 4. Assemble linear form f = �?2π² sin(πx)sin(πy) v dx ─────────────
     let source = DomainSourceIntegrator::new(|x: &[f64]| {
         2.0 * PI * PI * (PI * x[0]).sin() * (PI * x[1]).sin()
     });
@@ -86,12 +86,12 @@ fn main() {
     println!("  h = {h:.4e},  L² error = {l2:.4e}");
     println!("  (Expected O(h^{}) for P{} elements)", args.order + 1, args.order);
 
-    println!("\nDone. (No VTK output in this minimal example — add fem-io to enable.)");
+    println!("\nDone. (No VTK output in this minimal example �?add fem-io to enable.)");
 }
 
 // ─── L² error helper ─────────────────────────────────────────────────────────
 
-/// Compute the L² error ‖u_h − u_exact‖_{L²(Ω)} using element quadrature.
+/// Compute the L² error ‖u_h �?u_exact‖_{L²(Ω)} using element quadrature.
 fn l2_error_h1<S: fem_space::fe_space::FESpace>(
     space: &S,
     uh: &[f64],
@@ -156,3 +156,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

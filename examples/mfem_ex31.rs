@@ -1,10 +1,10 @@
-//! # Example 31 — Anisotropic Maxwell problem
+//! # Example 31 �?Anisotropic Maxwell problem
 //!
 //! Solves the 2-D H(curl) problem
 //!
 //! ```text
 //!   curl curl E + Σ E = f    in Ω = [0,1]²
-//!              n×E = 0       on ∂Ω
+//!              n×E = 0       on ∂�?
 //! ```
 //!
 //! with a constant anisotropic conductivity/permittivity tensor

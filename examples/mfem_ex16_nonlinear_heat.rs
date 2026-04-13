@@ -1,17 +1,16 @@
-//! # Example 16 — Nonlinear Heat Equation (Newton)  (analogous to MFEM ex16)
+//! # Example 16 �?Nonlinear Heat Equation (Newton)  (analogous to MFEM ex16)
 //!
 //! Solves the nonlinear heat equation with conductivity κ(u) = 1 + u²:
 //!
 //! ```text
 //!   −∇·(κ(u) ∇u) = f    in Ω = [0,1]²
-//!              u = 0    on ∂Ω
-//! ```
+//!              u = 0    on ∂�?//! ```
 //!
 //! Uses Newton–Raphson iteration with Picard Jacobian:
 //! ```text
-//!   J(uₙ) Δu = −F(uₙ),    uₙ₊₁ = uₙ + Δu
-//!   F(u) = ∫ κ(u) ∇u·∇v dx − ∫ f v dx
-//!   J(u) ≈ ∫ κ(u) ∇φⱼ·∇φᵢ dx   (Picard / frozen-κ Jacobian)
+//!   J(u�? Δu = −F(u�?,    uₙ₊�?= u�?+ Δu
+//!   F(u) = �?κ(u) ∇u·∇v dx �?�?f v dx
+//!   J(u) �?�?κ(u) ∇φⱼ·∇φᵢ dx   (Picard / frozen-κ Jacobian)
 //! ```
 //!
 //! Manufactured solution approach: choose `u* = sin(πx)sin(πy)` and compute
@@ -20,14 +19,14 @@
 //! For u* = sin(πx)sin(πy), κ(u*) = 1 + sin²(πx)sin²(πy):
 //! ```text
 //!   f = π²(2 + sin²(πx)sin²(πy)) sin(πx)sin(πy)
-//!       − 2π² sin³(πx)sin(πy)cos²(πx) − 2π² sin(πx)sin³(πy)cos²(πy)
+//!       �?2π² sin³(πx)sin(πy)cos²(πx) �?2π² sin(πx)sin³(πy)cos²(πy)
 //! ```
 //! (simplified below)
 //!
 //! ## Usage
 //! ```
-//! cargo run --example ex16_nonlinear_heat
-//! cargo run --example ex16_nonlinear_heat -- --n 16 --newton-tol 1e-10
+//! cargo run --example mfem_ex16_nonlinear_heat
+//! cargo run --example mfem_ex16_nonlinear_heat -- --n 16 --newton-tol 1e-10
 //! ```
 
 use std::f64::consts::PI;
@@ -60,7 +59,7 @@ fn main() {
     //   ∂u/∂x = π cos(πx) sin(πy),  ∂²u/∂x² = -π² sin(πx)sin(πy)
     //   κ(u) = 1 + sin²(πx)sin²(πy)
     //   -div(κ∇u) = -κ Δu - ∇κ·∇u = κ·2π²·u - ∇κ·∇u
-    //   ∇κ = (2u ∂u/∂x, 2u ∂u/∂y)
+    //   ∇�?= (2u ∂u/∂x, 2u ∂u/∂y)
     //   ∇κ·∇u = 2u(|∂u/∂x|² + |∂u/∂y|²) = 2u · π²(cos²(πx)sin²(πy) + sin²(πx)cos²(πy))
     //          = 2u · π²(cos²(πx)sin²(πy) + sin²(πx)cos²(πy))
     //   Combined: f = (1+u²)·2π²·u - 2u·π²(...)
@@ -99,8 +98,8 @@ fn main() {
     let mut u = vec![0.0_f64; n];
 
     match solver.solve(&form, &rhs, &mut u) {
-        Ok(r) => println!("\n  Newton converged: {} iters, ‖F‖ = {:.3e}", r.iterations, r.final_residual),
-        Err(r) => println!("\n  Newton did NOT converge: {} iters, ‖F‖ = {:.3e}", r.iterations, r.final_residual),
+        Ok(r) => println!("\n  Newton converged: {} iters, ‖F�?= {:.3e}", r.iterations, r.final_residual),
+        Err(r) => println!("\n  Newton did NOT converge: {} iters, ‖F�?= {:.3e}", r.iterations, r.final_residual),
     }
 
     // ─── 6. L² error ─────────────────────────────────────────────────────────
@@ -136,3 +135,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

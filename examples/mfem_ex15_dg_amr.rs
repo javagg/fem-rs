@@ -1,4 +1,4 @@
-//! # Example 15 — Poisson with mesh refinement and error estimation
+//! # Example 15 �?Poisson with mesh refinement and error estimation
 //!
 //! Demonstrates the AMR (Adaptive Mesh Refinement) infrastructure for the
 //! scalar Poisson equation:
@@ -22,10 +22,10 @@
 //!
 //! ## Usage
 //! ```
-//! cargo run --example ex15_dg_amr
-//! cargo run --example ex15_dg_amr -- --levels 5
-//! cargo run --example ex15_dg_amr -- --n 2 --levels 7
-//! cargo run --example ex15_dg_amr -- --nc --levels 4
+//! cargo run --example mfem_ex15_dg_amr
+//! cargo run --example mfem_ex15_dg_amr -- --levels 5
+//! cargo run --example mfem_ex15_dg_amr -- --n 2 --levels 7
+//! cargo run --example mfem_ex15_dg_amr -- --nc --levels 4
 //! ```
 
 use std::f64::consts::PI;
@@ -220,3 +220,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

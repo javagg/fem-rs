@@ -37,9 +37,9 @@
 | 27 | assembly | ✅ Done | 2026-04-04 | Convection, VectorDiffusion, BoundaryMass, GradDiv, Transpose, Sum integrators; VectorDomainLF, BoundaryNormalLF |
 | 28 | assembly | ✅ Done | 2026-04-04 | GridFunction wrapper (evaluate, L²/H¹ errors); postprocess (element gradients, curl, divergence, nodal gradient recovery); 10 tests |
 | 29 | assembly | ✅ Done | 2026-04-04 | DiscreteLinearOperator: gradient (H1→H(curl)), curl_2d (H(curl)→L2), divergence (H(div)→L2) as sparse matrices; de Rham exact sequence verified; 5 tests |
-| 30 | solver | ✅ Done | 2026-04-04 | Newmark-β time integrator (average acceleration, unconditionally stable); ex10_wave_equation example (sin(πx)sin(πy), max error 8.3e-3); 1 test |
+| 30 | solver | ✅ Done | 2026-04-04 | Newmark-β time integrator (average acceleration, unconditionally stable); mfem_ex10_wave_equation example (sin(πx)sin(πy), max error 8.3e-3); 1 test |
 | 31 | element | ✅ Done | 2026-04-04 | Gauss-Lobatto quadrature (n=2..5 on [-1,1]); seg_lobatto_rule, quad_lobatto_rule, hex_lobatto_rule; 7 tests |
-| 32 | examples | ✅ Done | 2026-04-04 | ex4_darcy (H(div) RT0 grad-div, MINRES); ex15_dg_amr (P1 + ZZ estimator + Dörfler marking + refinement, O(h²) convergence verified) |
+| 32 | examples | ✅ Done | 2026-04-04 | mfem_ex4_darcy (H(div) RT0 grad-div, MINRES); mfem_ex15_dg_amr (P1 + ZZ estimator + Dörfler marking + refinement, O(h²) convergence verified) |
 | 33a | parallel | ✅ Done | 2026-04-05 | jsmpi crates.io package + JsMpiBackend replacing WasmWorkerBackend stub; WASM MPI via jsmpi Web Workers |
 | 33b | parallel | ✅ Done | 2026-04-05 | DofPartition (DOF-level ownership, exclusive scan for global offsets) + ParallelFESpace (wraps serial FESpace + DOF ghost exchange); 5 tests |
 | 33c | parallel | ✅ Done | 2026-04-05 | ParVector (distributed vector, global_dot/norm, ghost exchange) + ParCsrMatrix (diag+offd split, parallel SpMV); 7 tests |

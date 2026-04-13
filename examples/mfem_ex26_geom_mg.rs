@@ -1,4 +1,4 @@
-//! ex26_geom_mg - baseline geometric multigrid V-cycle demo.
+//! mfem_ex26_geom_mg - baseline geometric multigrid V-cycle demo.
 //!
 //! This is a compact MFEM ex26-style baseline that demonstrates the new
 //! `GeomMGHierarchy` + `GeomMGPrecond` solve path on a nested 1D Poisson
@@ -10,7 +10,7 @@ use fem_solver::{solve_vcycle_geom_mg, GeomMGHierarchy, GeomMGPrecond, SolverCon
 fn main() {
     let args = parse_args();
 
-    println!("=== ex26_geom_mg: geometric multigrid baseline ===");
+    println!("=== mfem_ex26_geom_mg: geometric multigrid baseline ===");
     println!("  fine_n={}, max_iter={}, rtol={:.1e}", args.fine_n, args.max_iter, args.rtol);
 
     // Build a 3-level nested hierarchy: N -> (N-1)/2 -> ...
@@ -117,3 +117,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

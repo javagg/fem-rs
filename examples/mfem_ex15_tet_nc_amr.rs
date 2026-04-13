@@ -1,4 +1,4 @@
-//! # Example 15 (3-D) — Tet4 non-conforming AMR showcase
+//! # Example 15 (3-D) �?Tet4 non-conforming AMR showcase
 //!
 //! Demonstrates 3-D non-conforming refinement on Tet4 meshes using `NCState3D`.
 //! This example focuses on mesh adaptation plumbing (mark -> refine -> prolongate)
@@ -6,10 +6,10 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example ex15_tet_nc_amr
-//! cargo run --example ex15_tet_nc_amr -- --n 2 --levels 4 --fraction 0.35
-//! cargo run --example ex15_tet_nc_amr -- --solve --levels 3
-//! cargo run --example ex15_tet_nc_amr -- --solve --vtk --vtk-dir output/ex15_tet
+//! cargo run --example mfem_ex15_tet_nc_amr
+//! cargo run --example mfem_ex15_tet_nc_amr -- --n 2 --levels 4 --fraction 0.35
+//! cargo run --example mfem_ex15_tet_nc_amr -- --solve --levels 3
+//! cargo run --example mfem_ex15_tet_nc_amr -- --solve --vtk --vtk-dir output/ex15_tet
 //! ```
 
 use fem_core::ElemId;
@@ -177,7 +177,7 @@ fn parse_args() -> Args {
         fraction: 0.30,
         solve: false,
         vtk: false,
-        vtk_dir: "output/ex15_tet_nc_amr".to_string(),
+        vtk_dir: "output/mfem_ex15_tet_nc_amr".to_string(),
     };
 
     let mut it = std::env::args().skip(1);
@@ -199,7 +199,7 @@ fn parse_args() -> Args {
                 a.vtk = true;
             }
             "--vtk-dir" => {
-                a.vtk_dir = it.next().unwrap_or("output/ex15_tet_nc_amr".to_string());
+                a.vtk_dir = it.next().unwrap_or("output/mfem_ex15_tet_nc_amr".to_string());
             }
             _ => {}
         }
@@ -305,3 +305,4 @@ fn l2_error_tet_p1<S: FESpace>(
 
     err2.sqrt()
 }
+

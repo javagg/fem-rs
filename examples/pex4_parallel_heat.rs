@@ -1,6 +1,6 @@
 //! # Parallel Example 4 — Parallel implicit heat equation time-stepping
 //!
-//! Extends `ex10_heat_equation` to run in parallel using `ThreadLauncher`.
+//! Extends `mfem_ex10_heat_equation` to run in parallel using `ThreadLauncher`.
 //!
 //! Solves the time-dependent heat equation on a distributed mesh:
 //!

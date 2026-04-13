@@ -1,4 +1,4 @@
-//! ex15_dynamic_amr - minimal dynamic AMR loop with refine + derefine.
+//! mfem_ex15_dynamic_amr - minimal dynamic AMR loop with refine + derefine.
 //!
 //! Demonstrates the Phase-57 core cycle on Tri3:
 //! 1) build synthetic nodal field
@@ -22,7 +22,7 @@ use fem_mesh::{
 fn main() {
     let args = parse_args();
 
-    println!("=== ex15_dynamic_amr: refine + derefine demo ===");
+    println!("=== mfem_ex15_dynamic_amr: refine + derefine demo ===");
     println!("  n={}, theta_refine={}, theta_derefine={}", args.n, args.theta_refine, args.theta_derefine);
 
     let mesh0 = SimplexMesh::<2>::unit_square_tri(args.n);
@@ -94,3 +94,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

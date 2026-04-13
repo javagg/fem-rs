@@ -1,10 +1,10 @@
-//! # Example 36 — Obstacle problem (toward MFEM ex36)
+//! # Example 36 �?Obstacle problem (toward MFEM ex36)
 //!
 //! Solves the constrained minimization problem
 //!
 //! ```text
-//!   minimize  1/2 ∫ |∇u|² dx - ∫ f u dx
-//!   subject to u >= ψ in Ω,   u = 0 on ∂Ω
+//!   minimize  1/2 �?|∇u|² dx - �?f u dx
+//!   subject to u >= ψ in Ω,   u = 0 on ∂�?
 //! ```
 //!
 //! on the unit square using a primal-dual active-set (PDAS) iteration on the

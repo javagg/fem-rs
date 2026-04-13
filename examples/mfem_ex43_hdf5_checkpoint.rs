@@ -1,4 +1,4 @@
-//! ex43_hdf5_checkpoint - parallel checkpoint/restart baseline demo.
+//! mfem_ex43_hdf5_checkpoint - parallel checkpoint/restart baseline demo.
 //!
 //! This example demonstrates rank-partitioned checkpoint writing, latest-step
 //! restart read, and XDMF sidecar generation using fem-io-hdf5-parallel.
@@ -13,7 +13,7 @@ use fem_io_hdf5_parallel::{
 fn main() {
     let args = parse_args();
 
-    println!("=== ex43_hdf5_checkpoint (baseline) ===");
+    println!("=== mfem_ex43_hdf5_checkpoint (baseline) ===");
     println!("  out_h5={}, out_xdmf={}", args.out_h5, args.out_xdmf);
     println!("  backend={}", match args.backend { IoBackend::Partitioned => "partitioned", IoBackend::MpiCollective => "mpi" });
     println!("  restart_step={}", args.restart_step.map_or("latest".into(), |s| s.to_string()));
@@ -55,13 +55,13 @@ fn main() {
                 Ok(()) => {}
                 Err(Hdf5ParallelError::Hdf5FeatureDisabled) => {
                     println!("  HDF5 backend disabled (build without feature `hdf5`)");
-                    println!("  To enable real checkpoint I/O: cargo run --example ex43_hdf5_checkpoint --features fem-io-hdf5-parallel/hdf5");
+                    println!("  To enable real checkpoint I/O: cargo run --example mfem_ex43_hdf5_checkpoint --features fem-io-hdf5-parallel/hdf5");
                     println!("  PASS (API fallback verified)");
                     return;
                 }
                 Err(Hdf5ParallelError::Hdf5MpiFeatureDisabled) => {
                     println!("  MPI HDF5 backend disabled (build without feature `hdf5-mpi`)");
-                    println!("  Use partitioned mode or enable: cargo run --example ex43_hdf5_checkpoint --features fem-io-hdf5-parallel/hdf5-mpi -- --backend mpi");
+                    println!("  Use partitioned mode or enable: cargo run --example mfem_ex43_hdf5_checkpoint --features fem-io-hdf5-parallel/hdf5-mpi -- --backend mpi");
                     println!("  PASS (MPI backend fallback verified)");
                     return;
                 }
@@ -156,3 +156,4 @@ fn parse_args() -> Args {
     }
     args
 }
+

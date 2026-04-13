@@ -3,9 +3,8 @@
 //! Solves the second-order time-domain Maxwell equation for the electric field:
 //!
 //! ```text
-//!   ε ∂²E/∂t² + σ ∂E/∂t + curl(μ⁻¹ curl E) = J(t)    in Ω = [0,1]²
-//!                                       n×E = 0          on ∂Ω
-//! ```
+//!   ε ∂²E/∂t² + σ ∂E/∂t + curl(μ⁻�?curl E) = J(t)    in Ω = [0,1]²
+//!                                       n×E = 0          on ∂�?//! ```
 //!
 //! with the manufactured solution:
 //!
@@ -21,8 +20,7 @@
 //!         where E₀ = (sin(πy), sin(πx))
 //! ```
 //!
-//! The Newmark-β average acceleration scheme (β=1/4, γ=1/2) is used —
-//! unconditionally stable and second-order accurate in time.
+//! The Newmark-β average acceleration scheme (β=1/4, γ=1/2) is used �?//! unconditionally stable and second-order accurate in time.
 //!
 //! ## Usage
 //! ```
@@ -178,7 +176,7 @@ mod tests {
         );
     }
 
-    /// Halving dt (with same mesh) should reduce the L² error — verifies second-
+    /// Halving dt (with same mesh) should reduce the L² error �?verifies second-
     /// order temporal accuracy of Newmark-β.
     #[test]
     fn ex10_maxwell_time_halving_dt_reduces_error() {
@@ -249,7 +247,7 @@ mod tests {
 //
 // Classic Newmark average acceleration for the damped second-order system.
 // K_eff = ε·M / (β dt²) + σ·M·γ/(β·dt) + K
-// f_eff = f_{n+1} + M/（β dt²) [u_n + dt v_n + (0.5-β)dt² a_n]
+// f_eff = f_{n+1} + M/（�?dt²) [u_n + dt v_n + (0.5-β)dt² a_n]
 //                  + σ M [γ/(β dt) u_n + (γ/β - 1) v_n + dt(γ/(2β)-1) a_n]
 
 fn newmark_damped_step(
@@ -408,7 +406,7 @@ fn assemble_force(space: &HCurlSpace<SimplexMesh<2>>, args: &Args, t: f64) -> Ve
 // ─── Initial velocity: Ė(0) = ω E₀ ─────────────────────────────────────────
 
 fn project_exact_vel(space: &HCurlSpace<SimplexMesh<2>>, t: f64) -> Vec<f64> {
-    // Ė = ω cos(ωt) E₀  →  at t=0: Ė(0) = ω E₀
+    // Ė = ω cos(ωt) E₀  �? at t=0: Ė(0) = ω E₀
     let cos_wt = (OMEGA * t).cos();
     let vel_fn = |x: &[f64]| vec![
         OMEGA * cos_wt * (PI * x[1]).sin(),
@@ -494,3 +492,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

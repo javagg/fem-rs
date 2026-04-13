@@ -1,24 +1,24 @@
-//! # Navier-Stokes Example — Kovasznay Flow (Phase 44)
+//! # Navier-Stokes Example �?Kovasznay Flow (Phase 44)
 //!
 //! Solves the steady incompressible Navier-Stokes equations using Oseen
 //! linearization (Picard iteration):
 //!
 //! ```text
-//!   −ν Δu + (w·∇)u + ∇p = f    in Ω
+//!   −�?Δu + (w·�?u + ∇p = f    in Ω
 //!                   ∇·u = 0    in Ω
-//!                     u = u_exact on ∂Ω
+//!                     u = u_exact on ∂�?
 //! ```
 //!
 //! where `w` is the velocity from the previous Picard iteration.
 //!
 //! The benchmark is the Kovasznay flow (Re = 40) which has an analytical
-//! solution on `Ω = [−0.5, 1.5] × [0, 2]`:
+//! solution on `Ω = [�?.5, 1.5] × [0, 2]`:
 //!
 //! ```text
-//!   u_x = 1 − e^{λx} cos(2πy)
+//!   u_x = 1 �?e^{λx} cos(2πy)
 //!   u_y = λ/(2π) e^{λx} sin(2πy)
 //!   p   = −e^{2λx}/2 + C
-//!   λ   = Re/2 − √(Re²/4 + 4π²)
+//!   λ   = Re/2 �?�?Re²/4 + 4π²)
 //! ```
 //!
 //! ## Usage
@@ -271,3 +271,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

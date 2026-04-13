@@ -1,17 +1,17 @@
-//! # Example 33 — Maxwell with non-homogeneous tangential boundary load
+//! # Example 33 �?Maxwell with non-homogeneous tangential boundary load
 //!
 //! Solves the 2-D H(curl) problem
 //!
 //! ```text
 //!   curl curl E + E = f          in Ω = [0,1]²
-//!   curl E + γ (n×E) = g         on ∂Ω
+//!   curl E + γ (n×E) = g         on ∂�?
 //! ```
 //!
 //! in weak form using the H(curl) boundary terms
 //!
 //! ```text
-//!   ∫ curl E curl v + ∫ E·v + γ ∫ (n×E)(n×v)
-//!     = ∫ f·v + ∫ g (n×v)
+//!   �?curl E curl v + �?E·v + γ �?(n×E)(n×v)
+//!     = �?f·v + �?g (n×v)
 //! ```
 //!
 //! with manufactured exact solution

@@ -1,4 +1,4 @@
-//! ex17_dg_elasticity - baseline vector DG solve using block-diagonal SIP.
+//! mfem_ex17_dg_elasticity - baseline vector DG solve using block-diagonal SIP.
 
 use fem_assembly::{Assembler, DgElasticityAssembler, InteriorFaceList, standard::DomainSourceIntegrator};
 use fem_mesh::SimplexMesh;
@@ -8,7 +8,7 @@ use fem_space::{L2Space, fe_space::FESpace};
 fn main() {
     let args = parse_args();
 
-    println!("=== ex17_dg_elasticity (baseline) ===");
+    println!("=== mfem_ex17_dg_elasticity (baseline) ===");
     println!("  n={}, order={}, sigma={}", args.n, args.order, args.sigma);
 
     let mesh = SimplexMesh::<2>::unit_square_tri(args.n);
@@ -56,3 +56,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

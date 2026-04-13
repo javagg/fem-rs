@@ -1,4 +1,4 @@
-//! # Example 18 — 1-D Euler equations (baseline DG/FV hyperbolic path)
+//! # Example 18 �?1-D Euler equations (baseline DG/FV hyperbolic path)
 //!
 //! A practical baseline matching MFEM ex18 intent:
 //! - conservative variables `(rho, rho u, E)`
@@ -10,7 +10,7 @@ use fem_assembly::{HyperbolicFormIntegrator, NumericalFlux};
 
 fn main() {
     let args = parse_args();
-    println!("=== ex18_euler (baseline) ===");
+    println!("=== mfem_ex18_euler (baseline) ===");
     println!(
         "  n={}, tf={:.3}, cfl={:.3}, flux={}",
         args.n,
@@ -127,3 +127,4 @@ fn parse_args() -> Args {
     }
     out
 }
+

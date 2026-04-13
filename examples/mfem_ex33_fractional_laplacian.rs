@@ -1,10 +1,10 @@
-//! # Example 33 — Fractional Laplacian baseline (toward MFEM ex33)
+//! # Example 33 �?Fractional Laplacian baseline (toward MFEM ex33)
 //!
 //! Solves the spectral fractional Dirichlet problem on the unit square:
 //!
 //! ```text
 //!   (-Δ)^s u = f  in Ω = [0,1]²,
-//!            u = 0  on ∂Ω,
+//!            u = 0  on ∂�?
 //! ```
 //!
 //! using a dense generalized-eigen decomposition of the reduced FE pair
@@ -12,7 +12,7 @@
 //! and eigen infrastructure without adding a large matrix-function backend.
 //!
 //! The manufactured solution is the first Dirichlet eigenmode
-//! `u(x,y) = sin(πx) sin(πy)` with eigenvalue `λ₁ = 2π²`, so the right-hand side is
+//! `u(x,y) = sin(πx) sin(πy)` with eigenvalue `λ�?= 2π²`, so the right-hand side is
 //! `f = λ₁^s u`.
 //!
 //! ## Usage

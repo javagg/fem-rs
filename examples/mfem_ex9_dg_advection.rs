@@ -1,18 +1,18 @@
-//! # Example 9 — DG Diffusion (SIP)  (analogous to MFEM ex9 / ex14)
+//! # Example 9 �?DG Diffusion (SIP)  (analogous to MFEM ex9 / ex14)
 //!
 //! Solves the scalar Poisson equation using the Symmetric Interior Penalty (SIP)
 //! Discontinuous Galerkin method:
 //!
 //! ```text
 //!   −∇·(κ ∇u) = f    in Ω = [0,1]²
-//!            u = 0    on ∂Ω   (enforced weakly via penalty)
+//!            u = 0    on ∂�?  (enforced weakly via penalty)
 //! ```
 //!
 //! The SIP bilinear form is:
 //! ```text
 //!   a_h(u,v) = ∑_K ∫_K κ ∇u·∇v dx
-//!              − ∑_F ∫_F {κ∇u}·[[v]] ds   (consistency)
-//!              − ∑_F ∫_F {κ∇v}·[[u]] ds   (symmetry)
+//!              �?∑_F ∫_F {κ∇u}·[[v]] ds   (consistency)
+//!              �?∑_F ∫_F {κ∇v}·[[u]] ds   (symmetry)
 //!              + ∑_F σ/h_F ∫_F [[u]]·[[v]] ds  (penalty)
 //! ```
 //!
@@ -20,8 +20,8 @@
 //!
 //! ## Usage
 //! ```
-//! cargo run --example ex9_dg_advection
-//! cargo run --example ex9_dg_advection -- --n 16 --order 1 --sigma 20
+//! cargo run --example mfem_ex9_dg_advection
+//! cargo run --example mfem_ex9_dg_advection -- --n 16 --order 1 --sigma 20
 //! ```
 
 use std::f64::consts::PI;
@@ -142,3 +142,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

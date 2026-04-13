@@ -1,10 +1,10 @@
-//! # Example 32 — Maxwell with impedance boundary condition
+//! # Example 32 �?Maxwell with impedance boundary condition
 //!
 //! Solves the 2-D H(curl) problem
 //!
 //! ```text
 //!   curl curl E + E = f          in Ω = [0,1]²
-//!   n×(curl E) + γ (n×E) = g     on ∂Ω
+//!   n×(curl E) + γ (n×E) = g     on ∂�?
 //! ```
 //!
 //! with manufactured exact solution

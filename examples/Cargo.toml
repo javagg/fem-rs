@@ -37,16 +37,16 @@ name = "ceed_mass"
 path = "ceed_mass.rs"
 
 [[example]]
-name = "ex1_poisson"
-path = "ex1_poisson.rs"
+name = "mfem_ex1_poisson"
+path = "mfem_ex1_poisson.rs"
 
 [[example]]
-name = "ex2_elasticity"
-path = "ex2_elasticity.rs"
+name = "mfem_ex2_elasticity"
+path = "mfem_ex2_elasticity.rs"
 
 [[example]]
-name = "ex5_mixed_darcy"
-path = "ex5_mixed_darcy.rs"
+name = "mfem_ex5_mixed_darcy"
+path = "mfem_ex5_mixed_darcy.rs"
 
 [[example]]
 name = "debug_single"
@@ -57,48 +57,48 @@ name = "debug_interp"
 path = "debug_interp.rs"
 
 [[example]]
-name = "ex3_hex8_maxwell"
-path = "ex3_hex8_maxwell.rs"
+name = "mfem_ex3_hex8_maxwell"
+path = "mfem_ex3_hex8_maxwell.rs"
 
 [[example]]
-name = "ex9_dg_advection"
-path = "ex9_dg_advection.rs"
+name = "mfem_ex9_dg_advection"
+path = "mfem_ex9_dg_advection.rs"
 
 [[example]]
-name = "ex10_heat_equation"
-path = "ex10_heat_equation.rs"
+name = "mfem_ex10_heat_equation"
+path = "mfem_ex10_heat_equation.rs"
 
 [[example]]
-name = "ex10_wave_equation"
-path = "ex10_wave_equation.rs"
+name = "mfem_ex10_wave_equation"
+path = "mfem_ex10_wave_equation.rs"
 
 [[example]]
-name = "ex4_darcy"
-path = "ex4_darcy.rs"
+name = "mfem_ex4_darcy"
+path = "mfem_ex4_darcy.rs"
 
 [[example]]
-name = "ex15_dg_amr"
-path = "ex15_dg_amr.rs"
+name = "mfem_ex15_dg_amr"
+path = "mfem_ex15_dg_amr.rs"
 
 [[example]]
-name = "ex15_tet_nc_amr"
-path = "ex15_tet_nc_amr.rs"
+name = "mfem_ex15_tet_nc_amr"
+path = "mfem_ex15_tet_nc_amr.rs"
 
 [[example]]
-name = "ex15_dynamic_amr"
-path = "ex15_dynamic_amr.rs"
+name = "mfem_ex15_dynamic_amr"
+path = "mfem_ex15_dynamic_amr.rs"
 
 [[example]]
-name = "ex17_dg_elasticity"
-path = "ex17_dg_elasticity.rs"
+name = "mfem_ex17_dg_elasticity"
+path = "mfem_ex17_dg_elasticity.rs"
 
 [[example]]
-name = "ex18_euler"
-path = "ex18_euler.rs"
+name = "mfem_ex18_euler"
+path = "mfem_ex18_euler.rs"
 
 [[example]]
-name = "ex16_nonlinear_heat"
-path = "ex16_nonlinear_heat.rs"
+name = "mfem_ex16_nonlinear_heat"
+path = "mfem_ex16_nonlinear_heat.rs"
 
 [[example]]
 name = "pex1_poisson"
@@ -125,20 +125,20 @@ name = "mfem_ex19"
 path = "mfem_ex19.rs"
 
 [[example]]
-name = "ex7_neumann_mixed_bc"
-path = "ex7_neumann_mixed_bc.rs"
+name = "mfem_ex7_neumann_mixed_bc"
+path = "mfem_ex7_neumann_mixed_bc.rs"
 
 [[example]]
 name = "mfem_ex10_maxwell_time"
 path = "mfem_ex10_maxwell_time.rs"
 
 [[example]]
-name = "ex33_tangential_drive_maxwell"
-path = "ex33_tangential_drive_maxwell.rs"
+name = "mfem_ex33_tangential_drive_maxwell"
+path = "mfem_ex33_tangential_drive_maxwell.rs"
 
 [[example]]
-name = "ex39_named_attributes"
-path = "ex39_named_attributes.rs"
+name = "mfem_ex39_named_attributes"
+path = "mfem_ex39_named_attributes.rs"
 
 [[example]]
 name = "mfem_ex13_eigenvalue"
@@ -149,8 +149,8 @@ name = "mfem_ex33_fractional_laplacian"
 path = "mfem_ex33_fractional_laplacian.rs"
 
 [[example]]
-name = "ex14_dc_current"
-path = "ex14_dc_current.rs"
+name = "mfem_ex14_dc_current"
+path = "mfem_ex14_dc_current.rs"
 
 [[example]]
 name = "pex4_parallel_heat"
@@ -161,16 +161,16 @@ name = "mfem_ex1_convergence"
 path = "mfem_ex1_convergence.rs"
 
 [[example]]
-name = "ex26_geom_mg"
-path = "ex26_geom_mg.rs"
+name = "mfem_ex26_geom_mg"
+path = "mfem_ex26_geom_mg.rs"
 
 [[example]]
-name = "ex41_imex"
-path = "ex41_imex.rs"
+name = "mfem_ex41_imex"
+path = "mfem_ex41_imex.rs"
 
 [[example]]
-name = "ex43_hdf5_checkpoint"
-path = "ex43_hdf5_checkpoint.rs"
+name = "mfem_ex43_hdf5_checkpoint"
+path = "mfem_ex43_hdf5_checkpoint.rs"
 
 [[example]]
 name = "mfem_ex3_firstorder"
@@ -251,3 +251,4 @@ path = "mfem_joule.rs"
 [lib]
 name = "fem_examples"
 path = "src/lib.rs"
+

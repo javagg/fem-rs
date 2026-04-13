@@ -1,11 +1,10 @@
-//! # Example 13 — Eigenvalue Problem (LOBPCG)  (analogous to MFEM ex13)
+//! # Example 13 �?Eigenvalue Problem (LOBPCG)  (analogous to MFEM ex13)
 //!
 //! Finds the smallest eigenvalues and eigenmodes of the Laplacian:
 //!
 //! ```text
 //!   −Δu = λ u    in Ω = [0,1]²
-//!     u = 0    on ∂Ω
-//! ```
+//!     u = 0    on ∂�?//! ```
 //!
 //! In discrete form this is the generalized eigenvalue problem:
 //! ```text
@@ -13,8 +12,7 @@
 //! ```
 //! where K is the stiffness matrix and M is the mass matrix.
 //!
-//! The analytical eigenvalues are `λ_{m,n} = π²(m² + n²)` for m,n = 1,2,…
-//! Smallest: λ₁₁ = 2π² ≈ 19.739, λ₁₂ = λ₂₁ = 5π² ≈ 49.348, λ₂₂ = 8π² ≈ 78.957.
+//! The analytical eigenvalues are `λ_{m,n} = π²(m² + n²)` for m,n = 1,2,�?//! Smallest: λ₁₁ = 2π² �?19.739, λ₁₂ = λ₂₁ = 5π² �?49.348, λ₂₂ = 8π² �?78.957.
 //!
 //! ## Usage
 //! ```
@@ -106,7 +104,7 @@ fn analytical_eigenvalues(k: usize) -> Vec<f64> {
 /// Extract the submatrix rows/cols indexed by `free_dofs` (a sorted subset).
 fn extract_submatrix(a: &fem_linalg::CsrMatrix<f64>, free: &[usize]) -> fem_linalg::CsrMatrix<f64> {
     let n = free.len();
-    // Build reverse map: global index → free index (or usize::MAX if constrained)
+    // Build reverse map: global index �?free index (or usize::MAX if constrained)
     let global_n = a.nrows;
     let mut rev = vec![usize::MAX; global_n];
     for (fi, &gi) in free.iter().enumerate() { rev[gi] = fi; }
@@ -140,3 +138,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

@@ -1,4 +1,4 @@
-//! # Example 3 (Hex8) — 3D Maxwell smoke on a single Hex8 cell
+//! # Example 3 (Hex8) �?3D Maxwell smoke on a single Hex8 cell
 //!
 //! Solves:
 //!   curl curl E + E = 0
@@ -86,8 +86,9 @@ fn main() {
     let res = solve_pcg_jacobi(&mat, &rhs, &mut u, &cfg).expect("hex8 ex3 solve failed");
     let norm_u = u.iter().map(|v| v * v).sum::<f64>().sqrt();
 
-    println!("=== fem-rs ex3_hex8_maxwell ===");
+    println!("=== fem-rs mfem_ex3_hex8_maxwell ===");
     println!("  DOFs: {}", space.n_dofs());
     println!("  Converged: {} in {} iterations", res.converged, res.iterations);
     println!("  ||u||_2 = {:.3e}", norm_u);
 }
+

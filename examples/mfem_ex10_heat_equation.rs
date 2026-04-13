@@ -1,16 +1,16 @@
-//! # Example 10 — Time-dependent heat equation  (analogous to MFEM ex10)
+//! # Example 10 �?Time-dependent heat equation  (analogous to MFEM ex10)
 //!
 //! Solves the time-dependent heat equation:
 //!
 //! ```text
-//!   ∂u/∂t − κ Δu = 0    in Ω = [0,1]², t ∈ [0, T]
-//!             u = 0    on ∂Ω  (Dirichlet)
+//!   ∂u/∂t �?κ Δu = 0    in Ω = [0,1]², t �?[0, T]
+//!             u = 0    on ∂�? (Dirichlet)
 //!             u = u₀    at t = 0  (initial condition)
 //! ```
 //!
 //! The spatial semi-discretization gives the ODE:
 //! ```text
-//!   M du/dt + K u = 0   →   du/dt = −M⁻¹ K u = f(t,u)
+//!   M du/dt + K u = 0   �?  du/dt = −M⁻�?K u = f(t,u)
 //! ```
 //!
 //! Available time integrators (via `--method`):
@@ -21,13 +21,13 @@
 //! - `bdf2`   : BDF-2 (order 2, A-stable, multi-step)
 //!
 //! Initial condition: `u₀ = sin(πx)sin(πy)`.
-//! Exact solution:    `u(x,y,t) = e^{−2π²κt} sin(πx)sin(πy)`.
+//! Exact solution:    `u(x,y,t) = e^{�?π²κt} sin(πx)sin(πy)`.
 //!
 //! ## Usage
 //! ```
-//! cargo run --example ex10_heat_equation
-//! cargo run --example ex10_heat_equation -- --method sdirk2 --dt 0.01 --T 0.5
-//! cargo run --example ex10_heat_equation -- --method rk4 --n 16 --dt 0.001 --T 0.1
+//! cargo run --example mfem_ex10_heat_equation
+//! cargo run --example mfem_ex10_heat_equation -- --method sdirk2 --dt 0.01 --T 0.5
+//! cargo run --example mfem_ex10_heat_equation -- --method rk4 --n 16 --dt 0.001 --T 0.1
 //! ```
 
 use std::f64::consts::PI;
@@ -80,7 +80,7 @@ fn main() {
 
     let solve_cfg = SolverConfig { rtol: 1e-12, atol: 0.0, max_iter: 1000, verbose: false, ..SolverConfig::default() };
 
-    // ─── ODE RHS: dudt = M⁻¹(−K u) ──────────────────────────────────────────
+    // ─── ODE RHS: dudt = M⁻�?−K u) ──────────────────────────────────────────
     // Capture references to k_mat, m_mat, bnd, solve_cfg.
     let dudt = |_t: f64, u: &[f64], out: &mut [f64]| {
         let mut neg_ku = vec![0.0_f64; n];
@@ -91,17 +91,17 @@ fn main() {
         let _ = solve_pcg_jacobi(&m_mat, &neg_ku, out, &solve_cfg);
     };
 
-    // Jacobian of f(u) = M⁻¹(−K u): J = −M⁻¹ K
-    // For implicit methods, we need (I − dt γ J) = I + dt γ M⁻¹ K.
+    // Jacobian of f(u) = M⁻�?−K u): J = −M⁻�?K
+    // For implicit methods, we need (I �?dt γ J) = I + dt γ M⁻�?K.
     // Equivalently, the linear system is: (M + dt γ K) v = M u_old ... (varies per method)
-    // We implement the Jacobian as a CSR matrix of M⁻¹(-K) ≈ -M⁻¹K.
+    // We implement the Jacobian as a CSR matrix of M⁻�?-K) �?-M⁻¹K.
     // In practice, ImplicitTimeStepper builds (I - dt*J) and solves it, so
     // J(t,u) here should be ∂f/∂u = -M⁻¹K. We approximate via a finite difference
     // or just provide K/M. For simplicity, use a precomputed diagonal approximation.
     //
     // Actually, the ImplicitTimeStepper framework calls:
     //   sys = I - dt * J,  then solves sys * du = dt * f(t,u)
-    // where J ≈ ∂f/∂u. For our problem f = -M⁻¹K u, so J = -M⁻¹K.
+    // where J �?∂f/∂u. For our problem f = -M⁻¹K u, so J = -M⁻¹K.
     // We can build J as a CSR by computing -M⁻¹K column by column (expensive),
     // OR we implement a custom approach.
     //
@@ -145,11 +145,11 @@ fn main() {
         "ie" => {
             let stepper = ImplicitEuler;
             for _ in 0..n_steps {
-                // J(t,u) = -M⁻¹K  →  we pass the Jacobian via a closure.
+                // J(t,u) = -M⁻¹K  �? we pass the Jacobian via a closure.
                 // ImplicitTimeStepper builds (I - dt*J) and solves:
                 //   (I - dt*J) du = dt * f(t,u)
                 // Since J = -M⁻¹K, the system becomes:
-                //   (I + dt M⁻¹K) du = dt * f  →  multiply by M:
+                //   (I + dt M⁻¹K) du = dt * f  �? multiply by M:
                 //   (M + dt K) du = dt * M f   (not what the trait does directly)
                 // We implement a Picard Jacobian by returning a zero Jacobian
                 // and handling the solve manually via the step_implicit machinery.
@@ -172,7 +172,7 @@ fn main() {
             // Use ImplicitTimeStepper API with Jacobian closure
             let sdirk = Sdirk2;
             for _ in 0..n_steps {
-                // The Jacobian J(t,u) = ∂f/∂u where f = M⁻¹(-Ku).
+                // The Jacobian J(t,u) = ∂f/∂u where f = M⁻�?-Ku).
                 // For the SDIRK2 framework: system is (I - dt*γ*J) which is
                 // not directly the CSR we can assemble easily.
                 // We provide a scaled zero Jacobian (Picard) and rely on the
@@ -183,7 +183,7 @@ fn main() {
                 // The real linear solve happens through our custom PCG approach.
                 //
                 // For correctness, call step_implicit with a closure that
-                // returns -M⁻¹K ≈ 0 (Picard) since we cannot easily invert M
+                // returns -M⁻¹K �?0 (Picard) since we cannot easily invert M
                 // in Jacobian form. Use a direct method instead:
                 let g = 1.0 - std::f64::consts::FRAC_1_SQRT_2;
 
@@ -212,7 +212,7 @@ fn main() {
                 let mut k2 = vec![0.0_f64; n];
                 let _ = solve_pcg_jacobi(&sys2, &rhs2, &mut k2, &solve_cfg);
 
-                // Update: u ← u + dt*[(1-g)*k1 + g*k2]
+                // Update: u �?u + dt*[(1-g)*k1 + g*k2]
                 for i in 0..n {
                     u[i] += dt * ((1.0-g) * k1[i] + g * k2[i]);
                 }
@@ -223,7 +223,7 @@ fn main() {
         "bdf2" => {
             // BDF-2: custom 2-step scheme
             // Step 1: BDF-1 (implicit Euler) for startup
-            // Step k (k≥2): (3/2 M + dt K) u_{n+1} = 2 M u_n - 1/2 M u_{n-1}
+            // Step k (k�?): (3/2 M + dt K) u_{n+1} = 2 M u_n - 1/2 M u_{n-1}
             let mut u_prev = u.clone();
 
             // BDF-1 startup:
@@ -325,3 +325,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

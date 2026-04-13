@@ -1,17 +1,17 @@
-//! # Example 3 — Maxwell cavity  (analogous to MFEM ex3)
+//! # Example 3 �?Maxwell cavity  (analogous to MFEM ex3)
 //!
 //! Solves the vector curl-curl + mass problem on the unit square:
 //!
 //! ```text
-//!   ∇×(∇×E) + E = f    in Ω = [0,1]²
-//!          n×E = 0    on ∂Ω
+//!   ∇�?∇×E) + E = f    in Ω = [0,1]²
+//!          n×E = 0    on ∂�?
 //! ```
 //!
 //! with the manufactured solution `E = (sin(πy), sin(πx))`.
 //!
 //! ```text
-//!   curl E = π cos(πx) − π cos(πy)  (scalar in 2-D)
-//!   ∇×(curl E) = (π² sin(πy), π² sin(πx))
+//!   curl E = π cos(πx) �?π cos(πy)  (scalar in 2-D)
+//!   ∇�?curl E) = (π² sin(πy), π² sin(πx))
 //!   f = ∇×∇×E + E = ((1+π²) sin(πy), (1+π²) sin(πx))
 //! ```
 //!
@@ -60,7 +60,7 @@ fn main() {
     } else {
         println!("  h = {:.4e},  L² error = n/a (PML-like/multi-material modified operator)", result.h);
         println!(
-            "  ||u||₂ = {:.4e}, max|u| = {:.4e}",
+            "  ||u||�?= {:.4e}, max|u| = {:.4e}",
             result.solution_l2_norm, result.solution_max_abs
         );
     }
@@ -345,3 +345,4 @@ mod tests {
         );
     }
 }
+

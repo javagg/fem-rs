@@ -1,4 +1,4 @@
-//! ex39_named_attributes - baseline named-attribute workflow demo.
+//! mfem_ex39_named_attributes - baseline named-attribute workflow demo.
 //!
 //! Demonstrates:
 //! 1) GMSH PhysicalNames -> NamedAttributeRegistry
@@ -12,12 +12,12 @@ use std::collections::HashSet;
 
 fn main() {
     let args = parse_args();
-    println!("=== ex39_named_attributes: baseline named set workflow ===");
+    println!("=== mfem_ex39_named_attributes: baseline named set workflow ===");
     if args.merge_boundary {
         println!("  Mode: merge-boundary (inlet + outlet aggregation)");
     }
     if args.intersection_region {
-        println!("  Mode: intersection-region (inlet ∩ outlet)");
+        println!("  Mode: intersection-region (inlet �?outlet)");
     }
     if args.difference_region {
         println!("  Mode: difference-region (inlet \\ outlet)");
@@ -85,7 +85,7 @@ $EndElements
         let mut merged_boundary: HashSet<u32> = inlet_faces.iter().copied().collect();
         merged_boundary.extend(outlet_faces.iter().copied());
         println!(
-            "  merged boundary (inlet ∪ outlet): {} faces",
+            "  merged boundary (inlet �?outlet): {} faces",
             merged_boundary.len()
         );
         assert_eq!(
@@ -102,7 +102,7 @@ $EndElements
             .copied()
             .collect();
         println!(
-            "  intersection (inlet ∩ outlet): {} faces",
+            "  intersection (inlet �?outlet): {} faces",
             intersection.len()
         );
     }
@@ -306,3 +306,4 @@ $EndElements
         assert_eq!(difference.len(), inlet.len());
     }
 }
+

@@ -1,18 +1,18 @@
-//! # Example: Convergence rate study — P1 vs P2 elements
+//! # Example: Convergence rate study �?P1 vs P2 elements
 //!
 //! Systematically verifies the theoretical convergence rates of P1 and P2
 //! Lagrange elements for the Poisson equation:
 //!
 //! ```text
 //!   −Δu = f    in Ω = [0,1]²
-//!      u = 0    on ∂Ω
+//!      u = 0    on ∂�?
 //! ```
 //!
 //! Manufactured solution: `u(x,y) = sin(π x) sin(π y)`.
 //!
 //! Theoretical convergence in L² norm (Céa's lemma + Aubin-Nitsche):
 //! ```text
-//!   ‖u − u_h‖_{L²} = O(h^{p+1})   →   P1: O(h²),  P2: O(h³)
+//!   ‖u �?u_h‖_{L²} = O(h^{p+1})   �?  P1: O(h²),  P2: O(h³)
 //! ```
 //!
 //! The example:
@@ -66,7 +66,7 @@ fn main() {
 
     for &order in &[1u8, 2u8] {
         let expected_rate = (order + 1) as f64;
-        println!("── P{order} elements  (expected L² rate ≈ {expected_rate:.1}) ──────────────");
+        println!("── P{order} elements  (expected L² rate �?{expected_rate:.1}) ──────────────");
         println!(
             "{:>5}  {:>8}  {:>12}  {:>8}",
             "n", "dofs", "L² error", "rate"
@@ -87,7 +87,7 @@ fn main() {
                     rates.push(r);
                     format!("{r:.3}")
                 }
-                _ => "  —  ".to_string(),
+                _ => "  �? ".to_string(),
             };
 
             println!("  {:>3}  {:>8}  {:>12.4e}  {:>8}", n, dofs, err, rate_str);
@@ -104,9 +104,9 @@ fn main() {
                 "  Avg rate (last {} levels): {avg:.3}  {}",
                 rates.len() - rates.len() / 2,
                 if pass {
-                    "✓ PASS"
+                    "�?PASS"
                 } else {
-                    "✗ FAIL (expected ≈ {expected_rate})"
+                    "�?FAIL (expected �?{expected_rate})"
                 }
             );
         }
@@ -145,7 +145,7 @@ fn solve_poisson(n: usize, order: u8) -> (f64, usize) {
     (l2, ndofs)
 }
 
-// ─── L² error — dispatches to P1 or P2 quadrature ───────────────────────────
+// ─── L² error �?dispatches to P1 or P2 quadrature ───────────────────────────
 
 fn l2_error<S: FESpace>(space: &S, uh: &[f64], order: u8, u_ex: impl Fn(&[f64]) -> f64) -> f64 {
     let mesh = space.mesh();
@@ -233,3 +233,4 @@ fn parse_args() -> Args {
     }
     a
 }
+

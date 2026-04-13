@@ -3,8 +3,8 @@
 //! Solves the first-order full-wave Maxwell system in the 2-D TM mode:
 //!
 //! ```text
-//!   ε ∂E/∂t = curl(μ⁻¹ B) − σ E + J    E ∈ H(curl)
-//!     ∂B/∂t = −curl E                   B ∈ L2 (scalar)
+//!   ε ∂E/∂t = curl(μ⁻�?B) �?σ E + J    E �?H(curl)
+//!     ∂B/∂t = −curl E                   B �?L2 (scalar)
 //! ```
 //!
 //! on the unit square Ω = [0,1]² with **PEC** boundary condition `n×E = 0`
@@ -14,7 +14,7 @@
 //!
 //! ```text
 //!   E(x, t) = sin(π t) · (sin(πy), sin(πx))
-//!   B(x, t) = cos(π t) · (cos(πx) − cos(πy))
+//!   B(x, t) = cos(π t) · (cos(πx) �?cos(πy))
 //! ```
 //!
 //! This is an exact cavity mode with angular frequency ω = π.
@@ -24,8 +24,8 @@
 //!
 //! Staggered (Yee) leapfrog:
 //! ```text
-//!   B^{n+½} = B^{n-½} − dt · M_B⁻¹ · C · E^n
-//!   E^{n+1} = E^n     + dt · M_E⁻¹ · (1/μ) Cᵀ · B^{n+½}
+//!   B^{n+½} = B^{n-½} �?dt · M_B⁻�?· C · E^n
+//!   E^{n+1} = E^n     + dt · M_E⁻�?· (1/μ) Cᵀ · B^{n+½}
 //! ```
 //!
 //! The conserved energy is `(1/2) ||E||²_{ε M_E}  +  (1/2μ) ||B||²_{M_B}`.
@@ -69,10 +69,10 @@ fn main() {
     };
 
     // ─── 2. Initial conditions (t = 0) ───────────────────────────────────────
-    // Exact solution: E(x, 0) = sin(0)·(…) = 0
+    // Exact solution: E(x, 0) = sin(0)·(�? = 0
     let mut e = vec![0.0_f64; op.n_e];
 
-    // B(x, 0) = cos(0)·(cos πx − cos πy) = cos πx − cos πy
+    // B(x, 0) = cos(0)·(cos πx �?cos πy) = cos πx �?cos πy
     // Project onto L2 P0: evaluate at each triangle's centroid.
     let mesh   = SimplexMesh::<2>::unit_square_tri(args.n);
     let l2     = L2Space::new(mesh.clone(), 0);
@@ -117,7 +117,7 @@ fn main() {
     println!("\nDone.");
 }
 
-// ─── Project B(x,0) = (1/μ) · (cos πx − cos πy) onto L2 P0 ─────────────────
+// ─── Project B(x,0) = (1/μ) · (cos πx �?cos πy) onto L2 P0 ─────────────────
 
 fn project_b0_onto_l2<M: MeshTopology>(l2: &L2Space<M>, _mu: f64) -> Vec<f64> {
     let mesh = l2.mesh();
@@ -140,7 +140,7 @@ fn project_b0_onto_l2<M: MeshTopology>(l2: &L2Space<M>, _mu: f64) -> Vec<f64> {
         cx /= n_nodes as f64;
         cy /= n_nodes as f64;
 
-        // B(x, 0) = cos(πx) − cos(πy)   (exact, μ-independent; no 1/μ here
+        // B(x, 0) = cos(πx) �?cos(πy)   (exact, μ-independent; no 1/μ here
         // because the weak equation has the factor in the E equation's RHS)
         let bval = (PI * cx).cos() - (PI * cy).cos();
         for &d in dofs {
@@ -151,7 +151,7 @@ fn project_b0_onto_l2<M: MeshTopology>(l2: &L2Space<M>, _mu: f64) -> Vec<f64> {
     b
 }
 
-// ─── Compute ||B_h − B_exact(t)||_{L2} ──────────────────────────────────────
+// ─── Compute ||B_h �?B_exact(t)||_{L2} ──────────────────────────────────────
 
 fn l2_error_b<M: MeshTopology>(l2: &L2Space<M>, b_h: &[f64], t: f64, _mu: f64) -> f64 {
     let mesh = l2.mesh();
@@ -171,7 +171,7 @@ fn l2_error_b<M: MeshTopology>(l2: &L2Space<M>, b_h: &[f64], t: f64, _mu: f64) -
         let cx = (a[0] + b[0] + c[0]) / 3.0;
         let cy = (a[1] + b[1] + c[1]) / 3.0;
 
-        // Exact B(x, t) = cos(πt) · (cos πx − cos πy)
+        // Exact B(x, t) = cos(πt) · (cos πx �?cos πy)
         let b_exact = (PI * t).cos() * ((PI * cx).cos() - (PI * cy).cos());
 
         // P0 approximation: constant on the element
@@ -294,7 +294,7 @@ mod tests {
 
     /// Test 2: B-field L2 convergence on mesh refinement
     ///
-    /// As the mesh is refined (n=8 → n=12), the L2 error of the B field
+    /// As the mesh is refined (n=8 �?n=12), the L2 error of the B field
     /// should decrease, demonstrating convergence of the leapfrog scheme.
     #[test]
     fn first_order_maxwell_b_field_converges_on_refinement() {
@@ -346,7 +346,7 @@ mod tests {
     /// Test 3: Energy decay with resistive damping
     ///
     /// For σ > 0 (resistive losses), the total energy should monotonically decrease.
-    /// The decay rate depends on σ: larger σ → faster decay.
+    /// The decay rate depends on σ: larger σ �?faster decay.
     #[test]
     fn first_order_maxwell_energy_decays_with_damping() {
         let n = 10;
@@ -399,3 +399,4 @@ mod tests {
             "Energy should decay >5% with σ={}, got {:.2}%", sigma, 100.0 * energy_reduction);
     }
 }
+

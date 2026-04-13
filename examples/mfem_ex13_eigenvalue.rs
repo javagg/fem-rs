@@ -5,7 +5,7 @@
 //!
 //! ```text
 //!   curl curl E = ω² ε E    in Ω
-//!         n×E = 0            on ∂Ω  (PEC boundary)
+//!         n×E = 0            on ∂�? (PEC boundary)
 //! ```
 //!
 //! which becomes the discrete generalized eigenvalue problem on the **free DOFs**
@@ -16,8 +16,8 @@
 //! ```
 //!
 //! where:
-//! - `K = ∫ μ⁻¹ (curl E) · (curl v) dx`  — curl-curl stiffness
-//! - `M = ∫ ε E · v dx`                   — vector mass (permittivity weighted)
+//! - `K = �?μ⁻�?(curl E) · (curl v) dx`  �?curl-curl stiffness
+//! - `M = �?ε E · v dx`                   �?vector mass (permittivity weighted)
 //!
 //! ## Analytical solution (unit square cavity, μ=ε=1)
 //!
@@ -26,13 +26,13 @@
 //!
 //! The lowest non-zero eigenvalues are:
 //! ```text
-//!   ω²₁ = π²       ≈ 9.870    E = (sin(πy), sin(πx))
-//!   ω²₂ = 4π²      ≈ 39.478   E = (sin(2πy), sin(2πx))
-//!   ω²₃ = 5π²      ≈ 49.348   E = (sin(πy)cos(2πx), sin(2πx)cos(πy))  etc.
-//!   ω²₄ = 8π²      ≈ 78.957   E = (sin(2πy), sin(2πx)) with mixed modes
+//!   ω²�?= π²       �?9.870    E = (sin(πy), sin(πx))
+//!   ω²�?= 4π²      �?39.478   E = (sin(2πy), sin(2πx))
+//!   ω²�?= 5π²      �?49.348   E = (sin(πy)cos(2πx), sin(2πx)cos(πy))  etc.
+//!   ω²�?= 8π²      �?78.957   E = (sin(2πy), sin(2πx)) with mixed modes
 //! ```
 //!
-//! Note: this differs from the scalar Helmholtz eigenvalues `π²(m²+n²)` with `m,n≥1`.
+//! Note: this differs from the scalar Helmholtz eigenvalues `π²(m²+n²)` with `m,n�?`.
 //! The vector curl-curl problem admits modes where one component varies in x and the
 //! other in y independently, giving smaller eigenvalues like `π²(1²+0²) = π²`.
 //!
@@ -157,7 +157,7 @@ fn print_result(n: usize, result: &EigenCaseResult) {
     }
 
     if result.eigenvalues.is_empty() {
-        println!("  (no physical eigenvalues found — try larger --n or smaller --k)");
+        println!("  (no physical eigenvalues found �?try larger --n or smaller --k)");
         return;
     }
 
@@ -167,9 +167,9 @@ fn print_result(n: usize, result: &EigenCaseResult) {
     println!("  (Expected O(h²) convergence in ω² for ND1 elements)");
 
     if result.max_rel_err < 0.15 {
-        println!("  ✓ Eigenvalues within 15% of exact");
+        println!("  �?Eigenvalues within 15% of exact");
     } else {
-        println!("  ⚠ Use larger --n for better accuracy");
+        println!("  �?Use larger --n for better accuracy");
     }
 }
 
@@ -249,3 +249,4 @@ mod tests {
         );
     }
 }
+
