@@ -23,7 +23,7 @@ fn main() {
 
     println!("=== mfem_ex25: improved complex PML-like damping ===");
     println!(
-        "  n={}, omega={}, pml_thickness={}, sigma_max={}, power={}, wx={}, wy={}, stretch_blend={}",
+        "  n={}, omega={}, pml_thickness={}, sigma_max={}, power={}, wx={}, wy={}, stretch_blend={}, left_drive_amp={}",
         args.n,
         args.omega,
         args.thickness,
@@ -31,7 +31,8 @@ fn main() {
         args.power,
         args.wx,
         args.wy,
-        args.stretch_blend
+        args.stretch_blend,
+        args.left_drive_amp
     );
     println!(
         "  dofs={}, GMRES iters={}, res={:.3e}, converged={}",
@@ -106,6 +107,10 @@ impl BilinearIntegrator for PmlStretchDiffusionIntegrator {
 }
 
 fn solve_case(args: &Args) -> SolveResult {
+    solve_case_with_field(args).0
+}
+
+fn solve_case_with_field(args: &Args) -> (SolveResult, ComplexGridFunction) {
     let mesh = SimplexMesh::<2>::unit_square_tri(args.n);
     let space = H1Space::new(mesh, 1);
     let n = space.n_dofs();
@@ -144,7 +149,12 @@ fn solve_case(args: &Args) -> SolveResult {
     let other: Vec<usize> = boundary_dofs(mesh_ref, dm, &[1, 3]).into_iter().map(|d| d as usize).collect();
 
     sys.apply_dirichlet(&other, &vec![0.0; other.len()], &vec![0.0; other.len()], &mut rhs);
-    sys.apply_dirichlet(&left, &vec![1.0; left.len()], &vec![0.0; left.len()], &mut rhs);
+    sys.apply_dirichlet(
+        &left,
+        &vec![args.left_drive_amp; left.len()],
+        &vec![0.0; left.len()],
+        &mut rhs,
+    );
 
     let a = sys.to_flat_csr();
     let mut x = vec![0.0; 2 * n];
@@ -169,17 +179,20 @@ fn solve_case(args: &Args) -> SolveResult {
     let interior_idx: Vec<usize> = (0..n).filter(|&i| !is_boundary[i]).collect();
     let mean_interior_amp = mean_on_indices(&amp, &interior_idx);
 
-    SolveResult {
-        n_dofs: n,
-        iterations: res.iterations,
-        final_residual: res.final_residual,
-        converged: res.converged,
-        mean_left_amp,
-        mean_right_amp,
-        mean_interior_amp,
-        min_amp,
-        max_amp,
-    }
+    (
+        SolveResult {
+            n_dofs: n,
+            iterations: res.iterations,
+            final_residual: res.final_residual,
+            converged: res.converged,
+            mean_left_amp,
+            mean_right_amp,
+            mean_interior_amp,
+            min_amp,
+            max_amp,
+        },
+        gf,
+    )
 }
 
 fn mean_on_indices(values: &[f64], idx: &[usize]) -> f64 {
@@ -198,6 +211,7 @@ struct Args {
     wx: f64,
     wy: f64,
     stretch_blend: f64,
+    left_drive_amp: f64,
 }
 
 fn parse_args() -> Args {
@@ -210,6 +224,7 @@ fn parse_args() -> Args {
         wx: 1.0,
         wy: 1.0,
         stretch_blend: 0.0,
+        left_drive_amp: 1.0,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -221,6 +236,9 @@ fn parse_args() -> Args {
             "--pml-power" => a.power = it.next().unwrap_or("2.0".into()).parse().unwrap_or(2.0),
             "--wx" => a.wx = it.next().unwrap_or("1.0".into()).parse().unwrap_or(1.0),
             "--wy" => a.wy = it.next().unwrap_or("1.0".into()).parse().unwrap_or(1.0),
+            "--left-drive-amp" => {
+                a.left_drive_amp = it.next().unwrap_or("1.0".into()).parse().unwrap_or(1.0)
+            }
             "--stretch-blend" => {
                 a.stretch_blend = it.next().unwrap_or("0.0".into()).parse().unwrap_or(0.0)
             }
@@ -246,6 +264,7 @@ mod tests {
             wx: 1.0,
             wy: 1.0,
             stretch_blend: 0.0,
+            left_drive_amp: 1.0,
         }
     }
 
@@ -294,6 +313,89 @@ mod tests {
             delta > 1.0e-4,
             "stretch mode should measurably change right-boundary amplitude, delta={}",
             delta
+        );
+    }
+
+    #[test]
+    fn ex25_thicker_pml_reduces_reflection_and_interior_amplitude() {
+        let mut thin = base_args();
+        thin.thickness = 0.05;
+        thin.sigma_max = 4.0;
+        thin.power = 3.0;
+        let thin_r = solve_case(&thin);
+
+        let mut thick = base_args();
+        thick.thickness = 0.35;
+        thick.sigma_max = 4.0;
+        thick.power = 3.0;
+        let thick_r = solve_case(&thick);
+
+        assert!(thin_r.converged && thick_r.converged);
+        assert!(
+            thick_r.reflection_ratio() < thin_r.reflection_ratio(),
+            "expected thicker PML to lower reflection ratio: thin={} thick={}",
+            thin_r.reflection_ratio(),
+            thick_r.reflection_ratio()
+        );
+        assert!(
+            thick_r.mean_interior_amp < thin_r.mean_interior_amp,
+            "expected thicker PML to lower interior amplitude: thin={} thick={}",
+            thin_r.mean_interior_amp,
+            thick_r.mean_interior_amp
+        );
+    }
+
+    #[test]
+    fn ex25_solution_scales_linearly_with_left_drive() {
+        let mut half = base_args();
+        half.left_drive_amp = 0.5;
+        let rh = solve_case(&half);
+
+        let full = solve_case(&base_args());
+
+        assert!(rh.converged && full.converged);
+
+        let right_ratio = full.mean_right_amp / rh.mean_right_amp.max(1.0e-30);
+        let interior_ratio = full.mean_interior_amp / rh.mean_interior_amp.max(1.0e-30);
+        let max_ratio = full.max_amp / rh.max_amp.max(1.0e-30);
+
+        assert!((right_ratio - 2.0).abs() < 1.0e-6, "expected right amplitude to scale linearly, got ratio {}", right_ratio);
+        assert!((interior_ratio - 2.0).abs() < 1.0e-6, "expected interior amplitude to scale linearly, got ratio {}", interior_ratio);
+        assert!((max_ratio - 2.0).abs() < 1.0e-6, "expected max amplitude to scale linearly, got ratio {}", max_ratio);
+    }
+
+    #[test]
+    fn ex25_sign_reversed_left_drive_flips_complex_field() {
+        let (pos_result, pos_field) = solve_case_with_field(&base_args());
+
+        let mut neg = base_args();
+        neg.left_drive_amp = -1.0;
+        let (neg_result, neg_field) = solve_case_with_field(&neg);
+
+        assert!(pos_result.converged && neg_result.converged);
+        assert_eq!(pos_field.u_re.len(), neg_field.u_re.len());
+        assert_eq!(pos_field.u_im.len(), neg_field.u_im.len());
+
+        let re_sym_err = pos_field
+            .u_re
+            .iter()
+            .zip(&neg_field.u_re)
+            .map(|(a, b)| (a + b).abs())
+            .fold(0.0_f64, f64::max);
+        let im_sym_err = pos_field
+            .u_im
+            .iter()
+            .zip(&neg_field.u_im)
+            .map(|(a, b)| (a + b).abs())
+            .fold(0.0_f64, f64::max);
+
+        assert!(re_sym_err < 1.0e-10, "expected real field to flip sign, got max symmetry error {}", re_sym_err);
+        assert!(im_sym_err < 1.0e-10, "expected imaginary field to flip sign, got max symmetry error {}", im_sym_err);
+        assert!(
+            (pos_result.max_amp - neg_result.max_amp).abs() < 1.0e-10,
+            "expected amplitude envelope to be invariant under sign reversal: pos={} neg={}",
+            pos_result.max_amp,
+            neg_result.max_amp
         );
     }
 }

@@ -1,4 +1,4 @@
-// Square conductor cross-section for em_magnetostatics_2d example
+// Square conductor cross-section benchmark geometry
 // Usage: gmsh square_conductor.geo -2 -o square_conductor.msh -format msh4
 
 SetFactory("OpenCASCADE");

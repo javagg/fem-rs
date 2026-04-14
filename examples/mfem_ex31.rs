@@ -16,8 +16,9 @@ use fem_examples::maxwell::{StaticMaxwellBuilder, l2_error_hcurl_exact};
 use fem_mesh::SimplexMesh;
 use fem_space::HCurlSpace;
 
-const SIGMA_X: f64 = 4.0;
-const SIGMA_Y: f64 = 1.5;
+const DEFAULT_SIGMA_X: f64 = 4.0;
+const DEFAULT_SIGMA_Y: f64 = 1.5;
+const DEFAULT_SCALE: f64 = 1.0;
 
 fn main() {
     let args = parse_args();
@@ -34,7 +35,8 @@ fn main() {
         result.converged
     );
     println!("  h = {:.4e},  L² error = {:.4e}", result.h, result.l2_error);
-    println!("  Σ = diag({SIGMA_X:.3}, {SIGMA_Y:.3})");
+    println!("  ||u||₂ = {:.4e}", result.solution_l2);
+    println!("  Σ = diag({DEFAULT_SIGMA_X:.3}, {DEFAULT_SIGMA_Y:.3})");
 }
 
 struct CaseResult {
@@ -45,9 +47,19 @@ struct CaseResult {
     converged: bool,
     h: f64,
     l2_error: f64,
+    solution_l2: f64,
 }
 
 fn solve_case(n: usize) -> CaseResult {
+    solve_case_with_sigma_and_scale(n, DEFAULT_SIGMA_X, DEFAULT_SIGMA_Y, DEFAULT_SCALE)
+}
+
+#[cfg(test)]
+fn solve_case_with_sigma(n: usize, sigma_x: f64, sigma_y: f64) -> CaseResult {
+    solve_case_with_sigma_and_scale(n, sigma_x, sigma_y, DEFAULT_SCALE)
+}
+
+fn solve_case_with_sigma_and_scale(n: usize, sigma_x: f64, sigma_y: f64, scale: f64) -> CaseResult {
     let mesh = SimplexMesh::<2>::unit_square_tri(n);
     let space = HCurlSpace::new(mesh, 1);
 
@@ -55,12 +67,13 @@ fn solve_case(n: usize) -> CaseResult {
     let ess_bdr = [1, 1, 1, 1];
     let problem = StaticMaxwellBuilder::new(space)
         .with_quad_order(4)
-        .with_anisotropic_diag(1.0, SIGMA_X, SIGMA_Y)
-        .with_source_fn(source_value)
+        .with_anisotropic_diag(1.0, sigma_x, sigma_y)
+        .with_source_fn(move |x| source_value(x, sigma_x, sigma_y, scale))
         .add_pec_zero_from_marker(&bdr_attrs, &ess_bdr)
         .build();
     let n_dofs = problem.n_dofs();
     let solved = problem.solve();
+    let solution_l2 = solved.solution.iter().map(|v| v * v).sum::<f64>().sqrt();
 
     CaseResult {
         n_dofs,
@@ -70,14 +83,15 @@ fn solve_case(n: usize) -> CaseResult {
         converged: solved.solve_result.converged,
         h: 1.0 / n as f64,
         l2_error: l2_error_hcurl_exact(&solved.space, &solved.solution, |x| {
-            [(PI * x[1]).sin(), (PI * x[0]).sin()]
+            [scale * (PI * x[1]).sin(), scale * (PI * x[0]).sin()]
         }),
+        solution_l2,
     }
 }
 
-fn source_value(x: &[f64]) -> [f64; 2] {
-    let fx = (PI * PI + SIGMA_X) * (PI * x[1]).sin();
-    let fy = (PI * PI + SIGMA_Y) * (PI * x[0]).sin();
+fn source_value(x: &[f64], sigma_x: f64, sigma_y: f64, scale: f64) -> [f64; 2] {
+    let fx = scale * (PI * PI + sigma_x) * (PI * x[1]).sin();
+    let fy = scale * (PI * PI + sigma_y) * (PI * x[0]).sin();
     [fx, fy]
 }
 
@@ -131,6 +145,66 @@ mod tests {
             order_2,
             medium.l2_error,
             fine.l2_error
+        );
+    }
+
+    #[test]
+    fn anisotropic_maxwell_swapping_principal_axes_preserves_error_by_symmetry() {
+        let xy = solve_case_with_sigma(12, 4.0, 1.5);
+        let yx = solve_case_with_sigma(12, 1.5, 4.0);
+
+        assert!(xy.converged && yx.converged);
+
+        let rel_gap = (xy.l2_error - yx.l2_error).abs() / xy.l2_error.max(yx.l2_error).max(1e-30);
+        assert!(
+            rel_gap < 1.0e-8,
+            "swapping anisotropic principal values should preserve error by symmetry: rel_gap={}",
+            rel_gap
+        );
+    }
+
+    #[test]
+    fn anisotropic_maxwell_uniform_sigma_rescaling_preserves_solution_response() {
+        let base = solve_case_with_sigma(12, 4.0, 1.5);
+        let scaled = solve_case_with_sigma(12, 8.0, 3.0);
+
+        assert!(base.converged && scaled.converged);
+
+        let err_rel_gap = (base.l2_error - scaled.l2_error).abs()
+            / base.l2_error.max(scaled.l2_error).max(1e-30);
+        let sol_rel_gap = (base.solution_l2 - scaled.solution_l2).abs()
+            / base.solution_l2.max(scaled.solution_l2).max(1e-30);
+
+        assert!(
+            err_rel_gap < 1.0e-3,
+            "uniform sigma rescaling should preserve manufactured-solution error: rel_gap={}",
+            err_rel_gap
+        );
+        assert!(
+            sol_rel_gap < 1.0e-3,
+            "uniform sigma rescaling should preserve solution norm: rel_gap={}",
+            sol_rel_gap
+        );
+    }
+
+    #[test]
+    fn anisotropic_maxwell_solution_scales_linearly_with_source_amplitude() {
+        let half = solve_case_with_sigma_and_scale(12, 4.0, 1.5, 0.5);
+        let full = solve_case_with_sigma_and_scale(12, 4.0, 1.5, 1.0);
+
+        assert!(half.converged && full.converged);
+        let ratio = full.solution_l2 / half.solution_l2.max(1e-30);
+        let err_ratio = full.l2_error / half.l2_error.max(1e-30);
+
+        assert!(
+            (ratio - 2.0).abs() < 1.0e-6,
+            "expected anisotropic Maxwell solution norm to scale linearly, got ratio {}",
+            ratio
+        );
+        assert!(
+            (err_ratio - 2.0).abs() < 1.0e-6,
+            "expected anisotropic Maxwell error to scale linearly, got ratio {}",
+            err_ratio
         );
     }
 }

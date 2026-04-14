@@ -446,7 +446,7 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 | **ex2** | −∇²u = f, mixed BCs | H¹ P1/P2 | Dirichlet + Neumann | �?`mfem_ex2_elasticity` |
 | **ex3** (scalar) | −∇²u + αu = f (reaction-diffusion) | H¹ P1 | Dirichlet | �?Phase 6: `MassIntegrator` |
 | **ex13** | −∇·(ε∇�? = 0, elasticity | H¹ vector | Mixed | Phase 6: `ElasticityIntegrator` |
-| **pex1** | Parallel Poisson | H¹ + MPI | Dirichlet | �?`pex1_poisson` (contiguous/METIS, streaming) |
+| **pex1** | Parallel Poisson | H¹ + MPI | Dirichlet | �?`mfem_pex1_poisson` (contiguous/METIS, streaming) |
 
 ### Tier 2 �?Mixed & H(curl)/H(div) (Phase 6+)
 
@@ -456,7 +456,6 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 | **ex4** | −∇·(**u**) = f, **u** = −κ∇p (Darcy) | H(div) RT + L² | �?`mfem_ex4_darcy` H(div) RT0 grad-div MINRES |
 | **ex5** | Saddle-point Darcy/Stokes | H(div) × L² | �?`mfem_ex5_mixed_darcy` block PGMRES |
 | **ex22** | Time-harmonic Maxwell (complex coeff.) | H(curl) | Phase 7+ |
-| **em_magnetostatics_2d** (this project) | −∇·(ν∇Az) = Jz | H¹ P1 (2D A_z) | �?含制造解精度/P1收敛/高μ_r跳变系数回归 |
 
 ### Tier 3 �?Time Integration (Phase 7+)
 
@@ -480,10 +479,10 @@ Each MFEM example defines a target milestone for fem-rs feature completeness.
 
 | MFEM example | Problem | fem-rs milestone |
 |---|---|---|
-| **pex1** | Parallel Poisson (Poisson) | �?`pex1_poisson` (contiguous/METIS + streaming) |
-| **pex2** | Parallel mixed Poisson | �?`pex2_mixed_darcy` |
-| **pex3** | Parallel Maxwell (H(curl)) | �?`pex3_maxwell` |
-| **pex5** | Parallel Darcy | �?`pex5_darcy` |
+| **pex1** | Parallel Poisson (Poisson) | �?`mfem_pex1_poisson` (contiguous/METIS + streaming) |
+| **pex2** | Parallel mixed Poisson | �?`mfem_pex2_mixed_darcy` |
+| **pex3** | Parallel Maxwell (H(curl)) | �?`mfem_pex3_maxwell` |
+| **pex5** | Parallel Darcy | �?`mfem_pex5_darcy` |
 
 ---
 
@@ -624,9 +623,9 @@ prioritized roadmap for continued development.
 
 | Task | Space | Status |
 |------|-------|--------|
-| `pex2_mixed_darcy` | H(div) RT0 × L² | �?|
-| `pex3_maxwell` | H(curl) ND1 | �?|
-| `pex5_darcy` | H(div) × L² saddle-point | �?|
+| `mfem_pex2_mixed_darcy` | H(div) RT0 × L² | �?|
+| `mfem_pex3_maxwell` | H(curl) ND1 | �?|
+| `mfem_pex5_darcy` | H(div) × L² saddle-point | �?|
 
 ### Phase 39b �?Chebyshev Smoother + AMG F-cycle �?
 > **Completed** �?smoother quality directly impacts AMG convergence
@@ -816,9 +815,6 @@ Current baseline progress (2026-04-13):
 | 命名属性集 | �?ex39 | 🔨 named tag registry + mesh/submesh named selection + GMSH `PhysicalNames` bridge + `mfem_ex39_named_attributes` baseline | 🟢 �?| TBD |
 | Quad/Hex NC AMR（各向异性） | �?| 🔨 Tri/Tet only | 🟢 �?| TBD |
 | GPU 后端 (CUDA/HIP) | �?全库加�?| �?core CPU only（delegated to `vendor/linger` + `vendor/reed` + `vendor/jsmpi` 协同�?| 🟢 �?| TBD |
-| DPG 完整 miniapp | �?| 🔨 `mfem_dpg_poisson` primal-DPG proxy 基线（稳�?H1 装配+求解路径，保�?DPG 扩展接口目标）；完整 enriched test/trace 变量内核待补�?| 🟢 �?| TBD |
-| 曲面（surface）网�?FEM | �?ex7/ex29 | 🔨 `mfem_surface_fem` 球面 Laplace-Beltrami 基线（P1 surface FEM + icosphere 网格）；开放曲�?更完�?surface pipeline 待补�?| 🟢 �?| TBD |
-| TMOP 网格质量优化 | �?miniapp | 🔨 `mfem_tmop_mesh_quality` TMOP-like 网格质量优化基线（mean-ratio 目标 + 内点平滑 + 回溯线搜索）；完�?target-matrix TMOP 内核待补�?| 🟢 �?| TBD |
 
 ---
 
@@ -1003,7 +999,7 @@ Current baseline progress (2026-04-13):
 **状�?*：已完成�?026-04-13�?
 
 **实现**�?
-- [x] `pex3_maxwell.rs --pml` �?并行 ND1 Maxwell 支持 PML 模式
+- [x] `mfem_pex3_maxwell.rs --pml` �?并行 ND1 Maxwell 支持 PML 模式
 - [x] `VectorMassTensorIntegrator<ConstantMatrixCoeff>` �?张量质量矩阵集成
 - [x] `pml_mass_tensor()` 函数 �?生成 [1+σ, 0; 0, 1+σ] 各向同性阻尼张�?
 - [x] 验证�? rank, n=8, 64 iters, residual<1e-8 收敛
@@ -1031,8 +1027,6 @@ Current baseline progress (2026-04-13):
 | `ex_navier_stokes.rs` | `mfem_ex19.rs` | MFEM ex19 | 44 | Kovasznay 流不可压�?Navier-Stokes |
 | `ex_maxwell_eigenvalue.rs` | `mfem_ex13_eigenvalue.rs` | MFEM ex13 | �?| H(curl) 特征值问�?(LOBPCG，含细化后首�?最大相对误差改善回�? |
 | `ex_maxwell_time.rs` | `mfem_ex10_maxwell_time.rs` | MFEM ex10 | �?| 时间�?Maxwell (Newmark-β，已提取 `solve_case` 并补充时间步�?阻尼回归 + 时间自收敛二阶验�? |
-| `ex_convergence.rs` | `mfem_ex1_convergence.rs` | MFEM ex1 | �?| P1/P2 收敛性研�?|
-| `ex_maxwell_firstorder.rs` | `mfem_ex3_firstorder.rs` | MFEM ex3 | �?| 一�?E-B Maxwell 系统 (staggered leapfrog，含能量守恒/细化收敛/阻尼衰减回归) |
 
 **迁移完成**�?
 - �?文件系统迁移（move 命令�?

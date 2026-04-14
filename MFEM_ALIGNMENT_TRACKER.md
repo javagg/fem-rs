@@ -42,9 +42,6 @@
 - 🔨 障碍问题基线示例（`mfem_ex36_obstacle`，primal-dual active-set (PDAS) 变分不等式基线）已落地；semismooth Newton 内核待补齐�?
 - 🔨 拓扑优化基线示例（`mfem_ex37_topology_optimization`，标�?SIMP + OC + density filter + Heaviside projection + chain-rule sensitivity）已落地；全弹�?伴随/复杂约束路线待补齐�?
 - 🔨 截断积分 / 浸没边界基线示例（`mfem_ex38_immersed_boundary`，cut-cell subtriangulation + Nitsche-like �?Dirichlet（弦段近似））已落地；完�?cut-FEM/level-set 稳健几何与高阶界面积分路线待补齐�?
-- 🔨 TMOP 网格质量优化基线示例（`mfem_tmop_mesh_quality`，mean-ratio 质量目标 + 内点平滑 + 回溯线搜索）已落地；完整 target-matrix TMOP 路线待补齐�?
-- 🔨 surface FEM 基线示例（`mfem_surface_fem`，球�?Laplace-Beltrami：P1 曲面有限�?+ icosphere 网格）已落地；开放曲面与更完�?surface pipeline 待补齐�?
-- 🔨 DPG 基线示例（`mfem_dpg_poisson`，primal-DPG proxy 路线）已落地；完�?enriched test/trace unknowns 路线待补齐�?
 - 🔨 命名属性集（baseline+）：`fem-mesh` 已提�?`NamedAttributeSet` / `NamedAttributeRegistry`，支�?mesh named queries �?`extract_submesh_by_name(...)`，`fem-io` 已提�?GMSH `PhysicalNames` -> named registry bridge，并新增 `mfem_ex39_named_attributes` 示例打通端到端路径�?
 - 🔨 几何多重网格 / LOR（Phase 58）：`GeomMGHierarchy` + `GeomMGPrecond` 基线已具备，并新�?`mfem_ex26_geom_mg` 示例用于持续回归�?
 - �?`ElementTransformation` 统一抽象层（完成）�?
@@ -81,7 +78,7 @@
 - �?已完成（ND1）：HCurlSpace �?`Quad4`/`Hex8` �?DOF 拓扑�?orientation�?
 - �?已完成（阶段性）：Quad/Hex �?ex3 类端到端�?
   - �?Quad4 路径已跑通（builder 零源 PEC smoke）�?
-  - �?Hex8 路径已打通（`mfem_ex3_hex8_maxwell` 示例入口 + `ex3_hex8_zero_source_full_pec_smoke` 回归）�?
+  - �?Hex8 路径已打通（`ex3_hex8_zero_source_full_pec_smoke` 回归）�?
 
 ---
 
@@ -112,7 +109,7 @@
 2. �?Hex ND2（完成）�?
   当前进展�?026-04-12）：新增 `HexND2` 参考元并接�?`VectorAssembler` �?`HCurlSpace`（`Hex8` order=2）路径，补充空间与元素回归�?
 3. �?Hex8 �?ex3 类端到端示例与验收闭环（完成）�?
-  当前进展�?026-04-12）：新增 `examples/mfem_ex3_hex8_maxwell.rs`，并�?`examples/src/maxwell.rs` 增加 `ex3_hex8_zero_source_full_pec_smoke` 回归；`cargo test -p fem-space --lib` �?`cargo test -p fem-examples --lib` 全量通过�?
+  当前进展�?026-04-12）：新增 `examples/src/maxwell.rs` 的 `ex3_hex8_zero_source_full_pec_smoke` 回归；`cargo test -p fem-space --lib` �?`cargo test -p fem-examples --lib` 全量通过�?
 
 ### P3
 
@@ -174,7 +171,6 @@
 
 验收证据�?026-04-12）：
 - 一阶全�?3D 回归：`cargo test -p fem-examples --lib first_order_3d_` 通过�?7/67），覆盖 `first_order_3d_energy_conserved_sigma0`、`first_order_3d_sigma_dissipates_energy`、`first_order_3d_absorbing_boundary_term_dissipates_energy_without_sigma`、`first_order_3d_impedance_boundary_term_dissipates_energy_without_sigma`、`first_order_3d_solver_wrapper_time_dependent_force_matches_static_when_constant` 等�?
-- 示例目标可用性：`cargo test -p fem-examples --example mfem_ex3_firstorder` 通过（目标可编译/可执行）�?
 
 ### 4.3 元素族覆�?
 

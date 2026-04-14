@@ -23,9 +23,9 @@
 //!
 //! ## Usage
 //! ```
-//! cargo run --example pex4_parallel_heat
-//! cargo run --example pex4_parallel_heat -- --ranks 4 --n 32 --dt 0.005 --T 0.2
-//! cargo run --example pex4_parallel_heat -- --p2 --n 16 --T 0.1
+//! cargo run --example mfem_pex4_parallel_heat
+//! cargo run --example mfem_pex4_parallel_heat -- --ranks 4 --n 32 --dt 0.005 --T 0.2
+//! cargo run --example mfem_pex4_parallel_heat -- --p2 --n 16 --T 0.1
 //! ```
 
 use std::f64::consts::PI;
@@ -54,7 +54,7 @@ fn main() {
     let kappa = parse_f64(&args, "--kappa").unwrap_or(1.0);
     let order: u8 = if use_p2 { 2 } else { 1 };
 
-    println!("=== fem-rs pex4: Parallel implicit heat equation ===");
+    println!("=== fem-rs mfem_pex4: Parallel implicit heat equation ===");
     println!("  Workers: {n_workers}, Mesh: {mesh_n}×{mesh_n}, P{order}");
     println!(
         "  κ = {kappa}, dt = {dt}, T = {t_end}, steps = {}",

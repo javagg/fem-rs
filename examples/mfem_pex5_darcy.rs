@@ -11,8 +11,8 @@
 //!
 //! ## Usage
 //! ```
-//! cargo run --example pex5_darcy
-//! cargo run --example pex5_darcy -- --n 16 --ranks 4
+//! cargo run --example mfem_pex5_darcy
+//! cargo run --example mfem_pex5_darcy -- --n 16 --ranks 4
 //! ```
 
 use std::f64::consts::PI;
@@ -40,7 +40,7 @@ fn main() {
     let n_workers = parse_arg(&args, "--ranks").unwrap_or(2);
     let mesh_n = parse_arg(&args, "--n").unwrap_or(16);
 
-    println!("=== fem-rs pex5: Parallel H(div) Darcy (RT0) ===");
+    println!("=== fem-rs mfem_pex5: Parallel H(div) Darcy (RT0) ===");
     println!("  Workers: {n_workers}, Mesh: {mesh_n}x{mesh_n}");
 
     let mesh = Arc::new(SimplexMesh::<2>::unit_square_tri(mesh_n));

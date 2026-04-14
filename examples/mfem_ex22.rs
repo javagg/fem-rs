@@ -45,6 +45,7 @@ struct Args {
     omega: f64,
     sigma: f64,
     abc_alpha_right: f64,
+    left_drive_amp: f64,
 }
 
 fn parse_args() -> Args {
@@ -53,6 +54,7 @@ fn parse_args() -> Args {
         omega: 1.5,
         sigma: 0.1,
         abc_alpha_right: 1.0,
+        left_drive_amp: 1.0,
     };
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -62,6 +64,7 @@ fn parse_args() -> Args {
             "--omega" => { i += 1; a.omega = raw[i].parse().unwrap(); }
             "--sigma" => { i += 1; a.sigma = raw[i].parse().unwrap(); }
             "--abc-alpha-right" => { i += 1; a.abc_alpha_right = raw[i].parse().unwrap(); }
+            "--left-drive-amp" => { i += 1; a.left_drive_amp = raw[i].parse().unwrap(); }
             other     => eprintln!("unknown arg: {other}"),
         }
         i += 1;
@@ -113,6 +116,10 @@ fn add_scaled_csr(a: &CsrMatrix<f64>, b: &CsrMatrix<f64>, scale_b: f64) -> CsrMa
 }
 
 fn solve_case(args: &Args) -> SolveResult {
+    solve_case_with_field(args).0
+}
+
+fn solve_case_with_field(args: &Args) -> (SolveResult, ComplexGridFunction) {
     let mesh = SimplexMesh::<2>::unit_square_tri(args.n);
     let space = H1Space::new(mesh, 1);
     let ndofs = space.n_dofs();
@@ -163,7 +170,7 @@ fn solve_case(args: &Args) -> SolveResult {
         .map(|d| d as usize)
         .collect();
 
-    let left_re: Vec<f64> = vec![1.0; left_dofs.len()];
+    let left_re: Vec<f64> = vec![args.left_drive_amp; left_dofs.len()];
     let left_im: Vec<f64> = vec![0.0; left_dofs.len()];
     let other_re: Vec<f64> = vec![0.0; other_dofs.len()];
     let other_im: Vec<f64> = vec![0.0; other_dofs.len()];
@@ -189,7 +196,7 @@ fn solve_case(args: &Args) -> SolveResult {
 
     let max_left_bc_err = left_dofs
         .iter()
-        .map(|&i| (gf.u_re[i] - 1.0).abs())
+        .map(|&i| (gf.u_re[i] - args.left_drive_amp).abs())
         .fold(0.0_f64, f64::max);
 
     let mut is_boundary = vec![false; ndofs];
@@ -204,18 +211,21 @@ fn solve_case(args: &Args) -> SolveResult {
     }
     let interior: Vec<usize> = (0..ndofs).filter(|&i| !is_boundary[i]).collect();
 
-    SolveResult {
-        n_dofs: ndofs,
-        iterations: res.iterations,
-        final_residual: res.final_residual,
-        converged: res.converged,
-        min_amp,
-        max_amp,
-        max_left_bc_err,
-        mean_left_amp: mean_on_indices(&amp, &left_dofs),
-        mean_right_amp: mean_on_indices(&amp, &right_dofs),
-        mean_interior_amp: mean_on_indices(&amp, &interior),
-    }
+    (
+        SolveResult {
+            n_dofs: ndofs,
+            iterations: res.iterations,
+            final_residual: res.final_residual,
+            converged: res.converged,
+            min_amp,
+            max_amp,
+            max_left_bc_err,
+            mean_left_amp: mean_on_indices(&amp, &left_dofs),
+            mean_right_amp: mean_on_indices(&amp, &right_dofs),
+            mean_interior_amp: mean_on_indices(&amp, &interior),
+        },
+        gf,
+    )
 }
 
 // ─── main ─────────────────────────────────────────────────────────────────────
@@ -229,6 +239,7 @@ fn main() {
         "  Mesh: {}×{},  ω = {:.4},  σ = {:.4},  α_right = {:.4}",
         args.n, args.n, args.omega, args.sigma, args.abc_alpha_right
     );
+    println!("  Left drive amplitude: {:.4}", args.left_drive_amp);
     println!("  DOFs: {}  (2×{} flat system)", result.n_dofs, result.n_dofs);
     println!(
         "  GMRES: {} iters, residual = {:.3e}, converged = {}",
@@ -260,6 +271,7 @@ mod tests {
             omega: 1.5,
             sigma: 0.1,
             abc_alpha_right: 1.0,
+            left_drive_amp: 1.0,
         }
     }
 
@@ -287,6 +299,108 @@ mod tests {
             "expected stronger right absorption to lower transmission proxy: weak={} strong={}",
             rw.transmission_ratio(),
             rs.transmission_ratio()
+        );
+    }
+
+    #[test]
+    fn ex22_turning_off_right_absorption_increases_right_boundary_amplitude() {
+        let mut open = base_args();
+        open.abc_alpha_right = 0.0;
+        let ro = solve_case(&open);
+
+        let absorbed = solve_case(&base_args());
+
+        assert!(ro.converged && absorbed.converged);
+        assert!(
+            ro.mean_right_amp > absorbed.mean_right_amp,
+            "expected no-ABC case to have larger right-boundary amplitude: open={} absorbed={}",
+            ro.mean_right_amp,
+            absorbed.mean_right_amp
+        );
+        assert!(
+            ro.transmission_ratio() > absorbed.transmission_ratio(),
+            "expected no-ABC case to have larger transmission proxy: open={} absorbed={}",
+            ro.transmission_ratio(),
+            absorbed.transmission_ratio()
+        );
+    }
+
+    #[test]
+    fn ex22_stronger_volumetric_damping_reduces_interior_and_transmitted_amplitude() {
+        let mut weak = base_args();
+        weak.sigma = 0.0;
+        let rw = solve_case(&weak);
+
+        let mut strong = base_args();
+        strong.sigma = 5.0;
+        let rs = solve_case(&strong);
+
+        assert!(rw.converged && rs.converged);
+        assert!(
+            rs.mean_interior_amp < rw.mean_interior_amp,
+            "expected stronger sigma to reduce interior amplitude: weak={} strong={}",
+            rw.mean_interior_amp,
+            rs.mean_interior_amp
+        );
+        assert!(
+            rs.transmission_ratio() < rw.transmission_ratio(),
+            "expected stronger sigma to reduce transmission proxy: weak={} strong={}",
+            rw.transmission_ratio(),
+            rs.transmission_ratio()
+        );
+    }
+
+    #[test]
+    fn ex22_solution_scales_linearly_with_left_port_drive() {
+        let mut half = base_args();
+        half.left_drive_amp = 0.5;
+        let rh = solve_case(&half);
+
+        let full = solve_case(&base_args());
+
+        assert!(rh.converged && full.converged);
+
+        let right_ratio = full.mean_right_amp / rh.mean_right_amp.max(1.0e-30);
+        let interior_ratio = full.mean_interior_amp / rh.mean_interior_amp.max(1.0e-30);
+        let max_ratio = full.max_amp / rh.max_amp.max(1.0e-30);
+
+        assert!((right_ratio - 2.0).abs() < 1.0e-6, "expected right amplitude to scale linearly, got ratio {}", right_ratio);
+        assert!((interior_ratio - 2.0).abs() < 1.0e-6, "expected interior amplitude to scale linearly, got ratio {}", interior_ratio);
+        assert!((max_ratio - 2.0).abs() < 1.0e-6, "expected max amplitude to scale linearly, got ratio {}", max_ratio);
+    }
+
+    #[test]
+    fn ex22_sign_reversed_left_drive_flips_complex_field() {
+        let (pos_result, pos_field) = solve_case_with_field(&base_args());
+
+        let mut neg = base_args();
+        neg.left_drive_amp = -1.0;
+        let (neg_result, neg_field) = solve_case_with_field(&neg);
+
+        assert!(pos_result.converged && neg_result.converged);
+        assert_eq!(pos_field.u_re.len(), neg_field.u_re.len());
+        assert_eq!(pos_field.u_im.len(), neg_field.u_im.len());
+
+        let re_sym_err = pos_field
+            .u_re
+            .iter()
+            .zip(&neg_field.u_re)
+            .map(|(a, b)| (a + b).abs())
+            .fold(0.0_f64, f64::max);
+        let im_sym_err = pos_field
+            .u_im
+            .iter()
+            .zip(&neg_field.u_im)
+            .map(|(a, b)| (a + b).abs())
+            .fold(0.0_f64, f64::max);
+
+        assert!(re_sym_err < 1.0e-10, "expected real field to flip sign, got max symmetry error {}", re_sym_err);
+        assert!(im_sym_err < 1.0e-10, "expected imaginary field to flip sign, got max symmetry error {}", im_sym_err);
+        assert!(
+            (pos_result.max_amp - neg_result.max_amp).abs() < 1.0e-10,
+            "expected amplitude envelope to be invariant under sign reversal: pos={} neg={}",
+            pos_result.max_amp,
+            neg_result.max_amp
         );
     }
 }

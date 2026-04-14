@@ -11,13 +11,13 @@
 //!
 //! ## Usage
 //! ```
-//! cargo run --example pex3_maxwell
-//! cargo run --example pex3_maxwell -- --n 16 --ranks 4
-//! cargo run --example pex3_maxwell -- --n 16 --ranks 4 --solver jacobi
+//! cargo run --example mfem_pex3_maxwell
+//! cargo run --example mfem_pex3_maxwell -- --n 16 --ranks 4
+//! cargo run --example mfem_pex3_maxwell -- --n 16 --ranks 4 --solver jacobi
 //! ```
 
 use std::f64::consts::PI;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use fem_examples::maxwell::marker_to_tags;
 use fem_assembly::{
@@ -36,6 +36,26 @@ use fem_parallel::launcher::native::ThreadLauncher;
 use fem_solver::SolverConfig;
 use fem_space::{HCurlSpace, fe_space::FESpace};
 use fem_space::constraints::boundary_dofs_hcurl;
+
+#[derive(Clone, Copy)]
+struct RunArgs {
+    n_workers: usize,
+    mesh_n: usize,
+    solver: SolverKind,
+    has_pml: bool,
+    pml_thickness: f64,
+    sigma_max: f64,
+    source_scale: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CaseResult {
+    n_global_dofs: usize,
+    iterations: usize,
+    final_residual: f64,
+    converged: bool,
+    solution_l2: f64,
+}
 
 #[derive(Clone, Copy)]
 enum SolverKind {
@@ -68,18 +88,45 @@ fn main() {
     let solver = parse_solver(&args);
     let pml_thickness = parse_float(&args, "--pml-thickness").unwrap_or(0.2);
     let sigma_max = parse_float(&args, "--sigma-max").unwrap_or(2.0);
+    let source_scale = parse_float(&args, "--source-scale").unwrap_or(1.0);
     let has_pml = args.iter().any(|a| a == "--pml");
 
-    println!("=== fem-rs pex3: Parallel Maxwell (ND1) ===");
-    println!("  Workers: {n_workers}, Mesh: {mesh_n}x{mesh_n}");
-    println!("  Solver: {}", solver.as_str());
-    if has_pml {
-        println!("  PML-like damping: thickness={}, sigma_max={}", pml_thickness, sigma_max);
+    let run = RunArgs {
+        n_workers,
+        mesh_n,
+        solver,
+        has_pml,
+        pml_thickness,
+        sigma_max,
+        source_scale,
+    };
+    let result = solve_case(run);
+
+    println!("=== fem-rs mfem_pex3: Parallel Maxwell (ND1) ===");
+    println!("  Workers: {} Mesh: {}x{}", run.n_workers, run.mesh_n, run.mesh_n);
+    println!("  Solver: {}", run.solver.as_str());
+    if run.has_pml {
+        println!("  PML-like damping: thickness={}, sigma_max={}", run.pml_thickness, run.sigma_max);
     }
+    println!("  Global DOFs: {}", result.n_global_dofs);
+    println!(
+        "  PCG: {} iters, residual = {:.3e}, converged = {}",
+        result.iterations,
+        result.final_residual,
+        result.converged
+    );
+    println!("  Solution ||u||_2 = {:.3e}", result.solution_l2);
+    let h = 1.0 / run.mesh_n as f64;
+    println!("  h = {h:.4e}  (expected O(h) error for ND1)");
+    println!("=== Done ===");
+}
 
-    let mesh = Arc::new(SimplexMesh::<2>::unit_square_tri(mesh_n));
+fn solve_case(run: RunArgs) -> CaseResult {
+    let mesh = Arc::new(SimplexMesh::<2>::unit_square_tri(run.mesh_n));
+    let out = Arc::new(Mutex::new(None::<CaseResult>));
+    let out_closure = Arc::clone(&out);
 
-    let launcher = ThreadLauncher::new(WorkerConfig::new(n_workers));
+    let launcher = ThreadLauncher::new(WorkerConfig::new(run.n_workers));
     launcher.launch(move |comm| {
         let rank = comm.rank();
 
@@ -92,14 +139,12 @@ fn main() {
             local_space, &par_mesh, comm.clone(),
         );
 
-        if rank == 0 {
-            println!("  Global DOFs: {}", par_space.n_global_dofs());
-        }
+        let n_global_dofs = par_space.n_global_dofs();
 
         // 3. Assemble (∇×∇× + damped mass).
         let curl_curl = CurlCurlIntegrator { mu: 1.0 };
-        let mut a_mat = if has_pml {
-            let tau_coeff = pml_mass_tensor(pml_thickness, sigma_max);
+        let mut a_mat = if run.has_pml {
+            let tau_coeff = pml_mass_tensor(run.pml_thickness, run.sigma_max);
             let vec_mass = VectorMassTensorIntegrator { alpha: tau_coeff };
             ParVectorAssembler::assemble_bilinear(
                 &par_space, &[&curl_curl, &vec_mass], 4,
@@ -112,7 +157,9 @@ fn main() {
         };
 
         // 4. Assemble RHS: f = ((1+π²)sin(πy), (1+π²)sin(πx)).
-        let source = MaxwellSource;
+        let source = MaxwellSource {
+            scale: run.source_scale,
+        };
         let mut rhs = ParVectorAssembler::assemble_linear(&par_space, &[&source], 4);
 
         // 5. Apply n×E = 0 on all boundary edges.
@@ -136,7 +183,7 @@ fn main() {
         // 6. Solve with selected parallel solver.
         let mut u = ParVector::zeros(&par_space);
         let cfg = SolverConfig { rtol: 1e-8, max_iter: 10_000, verbose: false, ..SolverConfig::default() };
-        let res = match solver {
+        let res = match run.solver {
             SolverKind::Jacobi => par_solve_pcg_jacobi(&a_mat, &rhs, &mut u, &cfg).unwrap(),
             SolverKind::Ams => {
                 if rank == 0 {
@@ -146,28 +193,36 @@ fn main() {
             }
         };
 
+        let solution_l2 = u.global_norm();
+
         if rank == 0 {
-            println!(
-                "  PCG: {} iters, residual = {:.3e}, converged = {}",
-                res.iterations, res.final_residual, res.converged
-            );
-            let h = 1.0 / mesh_n as f64;
-            println!("  h = {h:.4e}  (expected O(h) error for ND1)");
-            println!("=== Done ===");
+            let mut guard = out_closure.lock().expect("lock case result");
+            *guard = Some(CaseResult {
+                n_global_dofs,
+                iterations: res.iterations,
+                final_residual: res.final_residual,
+                converged: res.converged,
+                solution_l2,
+            });
         }
     });
+
+    let guard = out.lock().expect("lock final result");
+    guard.expect("rank 0 case result missing")
 }
 
 // ─── Manufactured source ────────────────────────────────────────────────────
 
-struct MaxwellSource;
+struct MaxwellSource {
+    scale: f64,
+}
 
 impl VectorLinearIntegrator for MaxwellSource {
     fn add_to_element_vector(&self, qp: &VectorQpData<'_>, f_elem: &mut [f64]) {
         let x = qp.x_phys;
         let coeff = 1.0 + PI * PI;
-        let fx = coeff * (PI * x[1]).sin();
-        let fy = coeff * (PI * x[0]).sin();
+        let fx = self.scale * coeff * (PI * x[1]).sin();
+        let fy = self.scale * coeff * (PI * x[0]).sin();
 
         for i in 0..qp.n_dofs {
             let dot = qp.phi_vec[i * 2] * fx + qp.phi_vec[i * 2 + 1] * fy;
@@ -190,7 +245,7 @@ fn parse_float(args: &[String], flag: &str) -> Option<f64> {
 
 /// Construct a 2×2 PML damping tensor [1+σ, 0; 0, 1+σ] as ConstantMatrixCoeff.
 /// Uses a simple uniform damping profile at the boundaries.
-fn pml_mass_tensor(thickness: f64, sigma_max: f64) -> ConstantMatrixCoeff {
+fn pml_mass_tensor(_thickness: f64, sigma_max: f64) -> ConstantMatrixCoeff {
     // For simplicity, use uniform isotropic damping σ = 0.5 * sigma_max.
     let sigma = 0.5 * sigma_max;
     let diag = [1.0 + sigma, 0.0, 0.0, 1.0 + sigma];
@@ -203,4 +258,151 @@ fn parse_solver(args: &[String]) -> SolverKind {
         .and_then(|i| args.get(i + 1))
         .map(|s| SolverKind::from_str(s))
         .unwrap_or(SolverKind::Jacobi)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rel_diff(a: f64, b: f64) -> f64 {
+        (a - b).abs() / a.abs().max(b.abs()).max(1.0)
+    }
+
+    #[test]
+    fn pex3_maxwell_parallel_jacobi_converges() {
+        let r = solve_case(RunArgs {
+            n_workers: 2,
+            mesh_n: 8,
+            solver: SolverKind::Jacobi,
+            has_pml: false,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            source_scale: 1.0,
+        });
+        assert!(r.converged, "parallel pex3 solve did not converge");
+        assert!(r.final_residual < 1e-7, "residual too large: {}", r.final_residual);
+        assert!(r.n_global_dofs > 0);
+        assert!(r.solution_l2.is_finite() && r.solution_l2 > 0.0);
+    }
+
+    #[test]
+    fn pex3_maxwell_pml_reduces_solution_norm() {
+        let baseline = solve_case(RunArgs {
+            n_workers: 2,
+            mesh_n: 8,
+            solver: SolverKind::Jacobi,
+            has_pml: false,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            source_scale: 1.0,
+        });
+        let pml = solve_case(RunArgs {
+            n_workers: 2,
+            mesh_n: 8,
+            solver: SolverKind::Jacobi,
+            has_pml: true,
+            pml_thickness: 0.2,
+            sigma_max: 4.0,
+            source_scale: 1.0,
+        });
+
+        assert!(baseline.converged && pml.converged);
+        assert!(
+            pml.solution_l2 < baseline.solution_l2,
+            "expected PML damping to reduce ||u||2: baseline={} pml={}",
+            baseline.solution_l2,
+            pml.solution_l2
+        );
+    }
+
+    #[test]
+    fn pex3_maxwell_solution_is_stable_across_worker_partitions() {
+        let two_ranks = solve_case(RunArgs {
+            n_workers: 2,
+            mesh_n: 8,
+            solver: SolverKind::Jacobi,
+            has_pml: false,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            source_scale: 1.0,
+        });
+        let three_ranks = solve_case(RunArgs {
+            n_workers: 3,
+            mesh_n: 8,
+            solver: SolverKind::Jacobi,
+            has_pml: false,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            source_scale: 1.0,
+        });
+
+        assert!(two_ranks.converged && three_ranks.converged);
+        assert_eq!(two_ranks.n_global_dofs, three_ranks.n_global_dofs);
+        assert!(
+            rel_diff(two_ranks.solution_l2, three_ranks.solution_l2) < 1.0e-8,
+            "expected partition-independent solution norm: ranks2={} ranks3={}",
+            two_ranks.solution_l2,
+            three_ranks.solution_l2
+        );
+    }
+
+    #[test]
+    fn pex3_maxwell_stronger_pml_further_reduces_solution_norm() {
+        let moderate = solve_case(RunArgs {
+            n_workers: 2,
+            mesh_n: 8,
+            solver: SolverKind::Jacobi,
+            has_pml: true,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            source_scale: 1.0,
+        });
+        let strong = solve_case(RunArgs {
+            n_workers: 2,
+            mesh_n: 8,
+            solver: SolverKind::Jacobi,
+            has_pml: true,
+            pml_thickness: 0.2,
+            sigma_max: 4.0,
+            source_scale: 1.0,
+        });
+
+        assert!(moderate.converged && strong.converged);
+        assert!(
+            strong.solution_l2 < moderate.solution_l2,
+            "expected stronger PML to reduce ||u||2 further: moderate={} strong={}",
+            moderate.solution_l2,
+            strong.solution_l2
+        );
+    }
+
+    #[test]
+    fn pex3_maxwell_solution_scales_linearly_with_source_amplitude() {
+        let half = solve_case(RunArgs {
+            n_workers: 2,
+            mesh_n: 8,
+            solver: SolverKind::Jacobi,
+            has_pml: false,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            source_scale: 0.5,
+        });
+        let full = solve_case(RunArgs {
+            n_workers: 2,
+            mesh_n: 8,
+            solver: SolverKind::Jacobi,
+            has_pml: false,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            source_scale: 1.0,
+        });
+
+        assert!(half.converged && full.converged);
+        let ratio = full.solution_l2 / half.solution_l2.max(1.0e-30);
+        assert!(
+            (ratio - 2.0).abs() < 1.0e-6,
+            "expected parallel Maxwell solution norm to scale linearly with source amplitude, got ratio {}",
+            ratio
+        );
+    }
 }

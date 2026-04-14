@@ -36,6 +36,7 @@ fn main() {
 
     println!("=== fem-rs Example 3: Maxwell cavity (curl-curl + mass) ===");
     println!("  Mesh: {}×{} subdivisions, ND1 elements", args.n, args.n);
+    println!("  Source scale: {}", args.source_scale);
     if args.pml_like {
         println!(
             "  Mode: PML-like anisotropic damping (thickness={}, sigma_max={}, wx={}, wy={})",
@@ -78,9 +79,12 @@ struct CaseResult {
     solution_max_abs: f64,
 }
 
-fn source_value(x: &[f64]) -> [f64; 2] {
+fn source_value(x: &[f64], source_scale: f64) -> [f64; 2] {
     let coeff = 1.0 + PI * PI;
-    [coeff * (PI * x[1]).sin(), coeff * (PI * x[0]).sin()]
+    [
+        source_scale * coeff * (PI * x[1]).sin(),
+        source_scale * coeff * (PI * x[0]).sin(),
+    ]
 }
 
 fn axis_sigma_1d(coord: f64, lo: f64, hi: f64, thickness: f64, sigma_max: f64) -> f64 {
@@ -129,10 +133,11 @@ fn solve_case(args: &Args) -> CaseResult {
     // MFEM-style boundary marker (`ess_bdr`): all boundary attributes are essential.
     let attrs = [1, 2, 3, 4];
     let ess_bdr = [1, 1, 1, 1];
+    let source_scale = args.source_scale;
 
     let mut builder = StaticMaxwellBuilder::new(space)
         .with_quad_order(4)
-        .with_source_fn(source_value)
+        .with_source_fn(move |x| source_value(x, source_scale))
         .add_pec_zero_from_marker(&attrs, &ess_bdr);
 
     builder = if args.multi_material {
@@ -170,7 +175,10 @@ fn solve_case(args: &Args) -> CaseResult {
         None
     } else {
         Some(l2_error_hcurl_exact(&solved.space, &solved.solution, |x| {
-            [(PI * x[1]).sin(), (PI * x[0]).sin()]
+            [
+                args.source_scale * (PI * x[1]).sin(),
+                args.source_scale * (PI * x[0]).sin(),
+            ]
         }))
     };
 
@@ -197,6 +205,7 @@ struct Args {
     sigma_max: f64,
     wx: f64,
     wy: f64,
+    source_scale: f64,
 }
 
 fn parse_args() -> Args {
@@ -208,6 +217,7 @@ fn parse_args() -> Args {
         sigma_max: 2.0,
         wx: 1.0,
         wy: 1.0,
+        source_scale: 1.0,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -223,6 +233,9 @@ fn parse_args() -> Args {
             }
             "--wx" => { a.wx = it.next().unwrap_or("1.0".into()).parse().unwrap_or(1.0); }
             "--wy" => { a.wy = it.next().unwrap_or("1.0".into()).parse().unwrap_or(1.0); }
+            "--source-scale" => {
+                a.source_scale = it.next().unwrap_or("1.0".into()).parse().unwrap_or(1.0);
+            }
             _ => {}
         }
     }
@@ -232,6 +245,10 @@ fn parse_args() -> Args {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rel_diff(a: f64, b: f64) -> f64 {
+        (a - b).abs() / a.abs().max(b.abs()).max(1.0)
+    }
 
     #[test]
     fn ex3_mfem_marker_path_has_reasonable_error() {
@@ -243,6 +260,7 @@ mod tests {
             sigma_max: 2.0,
             wx: 1.0,
             wy: 1.0,
+            source_scale: 1.0,
         });
         assert!(result.converged);
         let l2 = result.l2_error.expect("expected manufactured L2 error in non-PML mode");
@@ -259,11 +277,44 @@ mod tests {
             sigma_max: 2.0,
             wx: 1.0,
             wy: 1.5,
+            source_scale: 1.0,
         });
         assert!(result.converged);
         assert!(result.n_boundary_dofs > 0);
         assert!(result.final_residual < 1.0e-6, "residual = {}", result.final_residual);
         assert!(result.l2_error.is_none());
+    }
+
+    #[test]
+    fn ex3_standard_mode_refinement_halves_hcurl_error() {
+        let coarse = solve_case(&Args {
+            n: 8,
+            pml_like: false,
+            multi_material: false,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            wx: 1.0,
+            wy: 1.0,
+            source_scale: 1.0,
+        });
+        let medium = solve_case(&Args {
+            n: 16,
+            pml_like: false,
+            multi_material: false,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            wx: 1.0,
+            wy: 1.0,
+            source_scale: 1.0,
+        });
+
+        let coarse_err = coarse.l2_error.expect("expected manufactured L2 error on coarse mesh");
+        let medium_err = medium.l2_error.expect("expected manufactured L2 error on refined mesh");
+
+        assert!(coarse.converged && medium.converged);
+        assert!(medium_err < coarse_err, "expected refinement to reduce error: coarse={} medium={}", coarse_err, medium_err);
+        let ratio = coarse_err / medium_err;
+        assert!(ratio > 1.8, "expected roughly first-order error halving on mesh doubling, got ratio {}", ratio);
     }
 
     #[test]
@@ -276,6 +327,7 @@ mod tests {
             sigma_max: 2.0,
             wx: 1.0,
             wy: 1.0,
+            source_scale: 1.0,
         });
         assert!(result.converged, "multi-material PML should converge");
         assert!(result.n_boundary_dofs > 0);
@@ -295,6 +347,7 @@ mod tests {
             sigma_max: 0.2,
             wx: 1.0,
             wy: 1.5,
+            source_scale: 1.0,
         });
         let strong = solve_case(&Args {
             n: 8,
@@ -304,6 +357,7 @@ mod tests {
             sigma_max: 4.0,
             wx: 1.0,
             wy: 1.5,
+            source_scale: 1.0,
         });
 
         assert!(weak.converged && strong.converged);
@@ -312,6 +366,70 @@ mod tests {
             "expected stronger PML damping to reduce ||u||2: weak={} strong={}",
             weak.solution_l2_norm,
             strong.solution_l2_norm
+        );
+    }
+
+    #[test]
+    fn ex3_pml_like_swapping_axis_weights_preserves_response_by_symmetry() {
+        let xy = solve_case(&Args {
+            n: 8,
+            pml_like: true,
+            multi_material: false,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            wx: 1.0,
+            wy: 1.5,
+            source_scale: 1.0,
+        });
+        let yx = solve_case(&Args {
+            n: 8,
+            pml_like: true,
+            multi_material: false,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            wx: 1.5,
+            wy: 1.0,
+            source_scale: 1.0,
+        });
+
+        assert!(xy.converged && yx.converged);
+        assert!(rel_diff(xy.solution_l2_norm, yx.solution_l2_norm) < 1.0e-10,
+            "expected symmetry under x/y weight swap in ||u||2: xy={} yx={}",
+            xy.solution_l2_norm, yx.solution_l2_norm);
+        assert!(rel_diff(xy.solution_max_abs, yx.solution_max_abs) < 1.0e-10,
+            "expected symmetry under x/y weight swap in max|u|: xy={} yx={}",
+            xy.solution_max_abs, yx.solution_max_abs);
+    }
+
+    #[test]
+    fn ex3_standard_mode_solution_scales_linearly_with_source() {
+        let half = solve_case(&Args {
+            n: 8,
+            pml_like: false,
+            multi_material: false,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            wx: 1.0,
+            wy: 1.0,
+            source_scale: 0.5,
+        });
+        let full = solve_case(&Args {
+            n: 8,
+            pml_like: false,
+            multi_material: false,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            wx: 1.0,
+            wy: 1.0,
+            source_scale: 1.0,
+        });
+
+        assert!(half.converged && full.converged);
+        let ratio = full.solution_l2_norm / half.solution_l2_norm.max(1.0e-30);
+        assert!(
+            (ratio - 2.0).abs() < 1.0e-6,
+            "expected linear response to source scaling, got ratio {}",
+            ratio
         );
     }
 
@@ -325,6 +443,7 @@ mod tests {
             sigma_max: 0.2,
             wx: 1.0,
             wy: 1.0,
+            source_scale: 1.0,
         });
         let strong = solve_case(&Args {
             n: 8,
@@ -334,6 +453,7 @@ mod tests {
             sigma_max: 4.0,
             wx: 1.0,
             wy: 1.0,
+            source_scale: 1.0,
         });
 
         assert!(weak.converged && strong.converged);

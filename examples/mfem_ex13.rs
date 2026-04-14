@@ -25,24 +25,51 @@ use std::f64::consts::PI;
 use fem_assembly::{Assembler, standard::{DiffusionIntegrator, MassIntegrator}};
 use fem_mesh::SimplexMesh;
 use fem_solver::{lobpcg, LobpcgConfig};
-use fem_space::{H1Space, fe_space::FESpace, constraints::{apply_dirichlet, boundary_dofs}};
+use fem_space::{H1Space, fe_space::FESpace, constraints::boundary_dofs};
+
+struct EigenCaseResult {
+    n_dofs: usize,
+    n_free: usize,
+    eigenvalues: Vec<f64>,
+    exact_eigs: Vec<f64>,
+    max_rel_err: f64,
+    converged: bool,
+    iterations: usize,
+}
 
 fn main() {
     let args = parse_args();
+    let result = solve_case(args.n, args.k);
+
     println!("=== fem-rs Example 13: Laplacian eigenvalues (LOBPCG) ===");
     println!("  Mesh: {}×{} subdivisions, {} smallest eigenpairs", args.n, args.n, args.k);
+    println!("  DOFs: {}", result.n_dofs);
+    println!("  Free (interior) DOFs: {}", result.n_free);
 
+    println!("\n  Computed eigenvalues:");
+    println!("  {:>4}  {:>14}  {:>14}  {:>12}", "Mode", "Computed λ", "Exact λ", "Rel. err");
+    for i in 0..result.eigenvalues.len() {
+        let lam = result.eigenvalues[i];
+        let ex_lam = result.exact_eigs[i];
+        let err = (lam - ex_lam).abs() / ex_lam.max(1.0e-30);
+        println!("  {:>4}  {:>14.6}  {:>14.6}  {:>12.4e}", i + 1, lam, ex_lam, err);
+    }
+    println!("\n  Max relative error: {:.4e}", result.max_rel_err);
+    println!("  Converged: {}, iterations: {}", result.converged, result.iterations);
+    println!("\nDone.");
+}
+
+fn solve_case(n_subdiv: usize, k: usize) -> EigenCaseResult {
     // ─── 1. Mesh and H¹ space ─────────────────────────────────────────────────
-    let mesh = SimplexMesh::<2>::unit_square_tri(args.n);
+    let mesh = SimplexMesh::<2>::unit_square_tri(n_subdiv);
     let space = H1Space::new(mesh, 1);
     let n = space.n_dofs();
-    println!("  DOFs: {n}");
 
     // ─── 2. Assemble K (stiffness) and M (mass) ───────────────────────────────
-    let mut k_mat = Assembler::assemble_bilinear(
+    let k_mat = Assembler::assemble_bilinear(
         &space, &[&DiffusionIntegrator { kappa: 1.0 }], 3
     );
-    let mut m_mat = Assembler::assemble_bilinear(
+    let m_mat = Assembler::assemble_bilinear(
         &space, &[&MassIntegrator { rho: 1.0 }], 3
     );
 
@@ -54,7 +81,6 @@ fn main() {
     let bnd_set: std::collections::HashSet<u32> = bnd.iter().cloned().collect();
     let free: Vec<usize> = (0..n).filter(|&i| !bnd_set.contains(&(i as u32))).collect();
     let nf = free.len();
-    println!("  Free (interior) DOFs: {nf}");
 
     // Extract the free×free submatrices using COO
     let k_free = extract_submatrix(&k_mat, &free);
@@ -66,24 +92,25 @@ fn main() {
         tol:      1e-8,
         verbose:  false,
     };
-    let result = lobpcg(&k_free, Some(&m_free), args.k, &cfg)
+    let result = lobpcg(&k_free, Some(&m_free), k, &cfg)
         .expect("LOBPCG failed");
 
-    println!("\n  Computed eigenvalues:");
-    println!("  {:>4}  {:>14}  {:>14}  {:>12}", "Mode", "Computed λ", "Exact λ (approx)", "Error");
-
-    // Expected eigenvalues (sorted): 2π², 5π², 5π², 8π², 10π², 10π², ...
-    let exact: Vec<f64> = analytical_eigenvalues(args.k);
-
-    for i in 0..result.eigenvalues.len() {
-        let lam    = result.eigenvalues[i];
-        let ex_lam = if i < exact.len() { exact[i] } else { f64::NAN };
-        let err    = if ex_lam.is_finite() { (lam - ex_lam).abs() / ex_lam } else { f64::NAN };
-        println!("  {:>4}  {:>14.6}  {:>14.6}  {:>12.4e}", i+1, lam, ex_lam, err);
+    let exact_eigs = analytical_eigenvalues(k);
+    let mut max_rel_err = 0.0_f64;
+    for (lam, exact) in result.eigenvalues.iter().zip(exact_eigs.iter()) {
+        let rel_err = (lam - exact).abs() / exact.max(1.0e-30);
+        max_rel_err = max_rel_err.max(rel_err);
     }
 
-    println!("\n  Converged: {}, iterations: {}", result.converged, result.iterations);
-    println!("\nDone.");
+    EigenCaseResult {
+        n_dofs: n,
+        n_free: nf,
+        eigenvalues: result.eigenvalues,
+        exact_eigs,
+        max_rel_err,
+        converged: result.converged,
+        iterations: result.iterations,
+    }
 }
 
 /// Return the k smallest analytical eigenvalues λ = π²(m²+n²), sorted.
@@ -96,7 +123,6 @@ fn analytical_eigenvalues(k: usize) -> Vec<f64> {
         }
     }
     eigs.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    eigs.dedup_by(|a, b| (*a - *b).abs() < 1e-8);
     eigs.truncate(k);
     eigs
 }
@@ -137,5 +163,75 @@ fn parse_args() -> Args {
         }
     }
     a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rel_err(value: f64, exact: f64) -> f64 {
+        (value - exact).abs() / exact.abs().max(1.0e-30)
+    }
+
+    #[test]
+    fn ex13_scalar_eigenvalues_coarse_mesh_matches_first_modes() {
+        let result = solve_case(10, 3);
+
+        assert!(result.converged, "LOBPCG did not converge");
+        assert_eq!(result.eigenvalues.len(), 3);
+        assert!(result.max_rel_err < 7.5e-2, "max relative error = {}", result.max_rel_err);
+        assert!(rel_err(result.eigenvalues[0], 2.0 * PI * PI) < 3.0e-2);
+        assert!(rel_err(result.eigenvalues[1], 5.0 * PI * PI) < 5.0e-2);
+        assert!(rel_err(result.eigenvalues[2], 5.0 * PI * PI) < 7.0e-2);
+    }
+
+    #[test]
+    fn ex13_scalar_refinement_improves_first_eigenvalue() {
+        let coarse = solve_case(8, 3);
+        let fine = solve_case(12, 3);
+
+        assert!(coarse.converged && fine.converged);
+        let exact = 2.0 * PI * PI;
+        let coarse_err = rel_err(coarse.eigenvalues[0], exact);
+        let fine_err = rel_err(fine.eigenvalues[0], exact);
+
+        assert!(
+            fine_err < coarse_err,
+            "expected refinement to improve first scalar eigenvalue: coarse={} fine={}",
+            coarse_err,
+            fine_err
+        );
+    }
+
+    #[test]
+    fn ex13_scalar_first_excited_pair_remains_nearly_degenerate() {
+        let result = solve_case(10, 3);
+
+        assert!(result.converged);
+        let exact = 5.0 * PI * PI;
+        let split = (result.eigenvalues[2] - result.eigenvalues[1]).abs() / exact;
+
+        assert!(rel_err(result.eigenvalues[1], exact) < 5.0e-2);
+        assert!(rel_err(result.eigenvalues[2], exact) < 7.0e-2);
+        assert!(split < 3.0e-2, "expected first excited pair to remain nearly degenerate, split={}", split);
+    }
+
+    #[test]
+    fn ex13_scalar_low_modes_are_stable_when_requesting_more_modes() {
+        let base = solve_case(10, 3);
+        let extended = solve_case(10, 5);
+
+        assert!(base.converged && extended.converged);
+        for mode in 0..3 {
+            let rel_gap = (base.eigenvalues[mode] - extended.eigenvalues[mode]).abs()
+                / base.eigenvalues[mode].abs().max(1.0e-30);
+            assert!(
+                rel_gap < 1.0e-10,
+                "expected low scalar eigenmodes to remain stable when requesting more modes: mode={} rel_gap={}",
+                mode + 1,
+                rel_gap
+            );
+        }
+    }
 }
 

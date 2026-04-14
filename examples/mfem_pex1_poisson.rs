@@ -5,12 +5,12 @@
 //! u(x,y) = sin(pi*x) sin(pi*y).
 //!
 //! Usage:
-//!   cargo run --example pex1_poisson                             # P1, 2 ranks, 16×16
-//!   cargo run --example pex1_poisson -- --p2                     # P2 elements
-//!   cargo run --example pex1_poisson -- --n 32 --ranks 4         # 32×32 mesh, 4 ranks
-//!   cargo run --example pex1_poisson -- --metis                  # METIS graph partitioner
-//!   cargo run --example pex1_poisson -- --streaming              # streaming partition
-//!   cargo run --example pex1_poisson -- --metis --streaming      # METIS + streaming
+//!   cargo run --example mfem_pex1_poisson                             # P1, 2 ranks, 16×16
+//!   cargo run --example mfem_pex1_poisson -- --p2                     # P2 elements
+//!   cargo run --example mfem_pex1_poisson -- --n 32 --ranks 4         # 32×32 mesh, 4 ranks
+//!   cargo run --example mfem_pex1_poisson -- --metis                  # METIS graph partitioner
+//!   cargo run --example mfem_pex1_poisson -- --streaming              # streaming partition
+//!   cargo run --example mfem_pex1_poisson -- --metis --streaming      # METIS + streaming
 
 use std::f64::consts::PI;
 use std::sync::Arc;
@@ -49,7 +49,7 @@ fn main() {
         (true,  true)  => "METIS+streaming",
     };
 
-    println!("=== fem-rs pex1: Parallel Poisson (P{order}) ===");
+    println!("=== fem-rs mfem_pex1: Parallel Poisson (P{order}) ===");
     println!("  Workers: {n_workers}, Mesh: {mesh_n}x{mesh_n}, Partitioner: {partitioner_name}");
 
     let mesh = Arc::new(SimplexMesh::<2>::unit_square_tri(mesh_n));

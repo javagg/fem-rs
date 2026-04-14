@@ -209,6 +209,10 @@ fn parse_args() -> Args {
 mod tests {
     use super::*;
 
+    fn rel_err(value: f64, exact: f64) -> f64 {
+        (value - exact).abs() / exact.abs().max(1e-30)
+    }
+
     #[test]
     fn maxwell_eigenvalue_coarse_mesh_matches_first_modes() {
         let result = solve_case(8, 3);
@@ -247,6 +251,114 @@ mod tests {
             coarse_first_err,
             fine_first_err
         );
+    }
+
+    #[test]
+    fn maxwell_eigenvalue_first_doublet_remains_nearly_degenerate() {
+        let result = solve_case(10, 4);
+
+        assert!(result.converged, "LOBPCG did not converge");
+        assert!(result.eigenvalues.len() >= 2, "expected at least two physical modes");
+
+        let lambda1 = result.eigenvalues[0];
+        let lambda2 = result.eigenvalues[1];
+        let exact = PI * PI;
+        let split = (lambda2 - lambda1).abs() / exact;
+
+        assert!(
+            rel_err(lambda1, exact) < 1.5e-2,
+            "first eigenvalue drifted too far from π²: computed={} exact={}",
+            lambda1,
+            exact
+        );
+        assert!(
+            rel_err(lambda2, exact) < 1.5e-2,
+            "second eigenvalue drifted too far from π²: computed={} exact={}",
+            lambda2,
+            exact
+        );
+        assert!(
+            split < 1.0e-2,
+            "expected first Maxwell doublet to remain nearly degenerate; relative split={}",
+            split
+        );
+    }
+
+    #[test]
+    fn maxwell_eigenvalue_refinement_improves_fourth_mode() {
+        let coarse = solve_case(8, 4);
+        let fine = solve_case(12, 4);
+
+        assert!(coarse.converged && fine.converged, "both eigen solves must converge");
+        assert_eq!(coarse.eigenvalues.len(), 4);
+        assert_eq!(fine.eigenvalues.len(), 4);
+
+        let coarse_fourth_err = rel_err(coarse.eigenvalues[3], coarse.exact_eigs[3]);
+        let fine_fourth_err = rel_err(fine.eigenvalues[3], fine.exact_eigs[3]);
+
+        assert!(
+            fine_fourth_err < coarse_fourth_err,
+            "expected refinement to improve fourth eigenvalue: coarse={} fine={}",
+            coarse_fourth_err,
+            fine_fourth_err
+        );
+        assert!(
+            fine.eigenvalues[3] > fine.eigenvalues[2],
+            "expected fourth mode to stay ordered above third mode: λ3={} λ4={}",
+            fine.eigenvalues[2],
+            fine.eigenvalues[3]
+        );
+    }
+
+    #[test]
+    fn maxwell_eigenvalue_refinement_improves_first_doublet_mean_and_split() {
+        let coarse = solve_case(8, 4);
+        let fine = solve_case(12, 4);
+
+        assert!(coarse.converged && fine.converged, "both eigen solves must converge");
+        assert!(coarse.eigenvalues.len() >= 2 && fine.eigenvalues.len() >= 2);
+
+        let exact = PI * PI;
+        let coarse_mean = 0.5 * (coarse.eigenvalues[0] + coarse.eigenvalues[1]);
+        let fine_mean = 0.5 * (fine.eigenvalues[0] + fine.eigenvalues[1]);
+        let coarse_mean_err = rel_err(coarse_mean, exact);
+        let fine_mean_err = rel_err(fine_mean, exact);
+        let coarse_split = (coarse.eigenvalues[1] - coarse.eigenvalues[0]).abs() / exact;
+        let fine_split = (fine.eigenvalues[1] - fine.eigenvalues[0]).abs() / exact;
+
+        assert!(
+            fine_mean_err < coarse_mean_err,
+            "expected refinement to improve first-doublet mean: coarse={} fine={}",
+            coarse_mean_err,
+            fine_mean_err
+        );
+        assert!(
+            fine_split < coarse_split,
+            "expected refinement to reduce first-doublet splitting: coarse={} fine={}",
+            coarse_split,
+            fine_split
+        );
+    }
+
+    #[test]
+    fn maxwell_eigenvalue_low_modes_are_stable_when_requesting_more_pairs() {
+        let base = solve_case(10, 3);
+        let extended = solve_case(10, 5);
+
+        assert!(base.converged && extended.converged, "both eigen solves must converge");
+        assert_eq!(base.eigenvalues.len(), 3);
+        assert!(extended.eigenvalues.len() >= 3);
+
+        for mode in 0..3 {
+            let rel_gap = (base.eigenvalues[mode] - extended.eigenvalues[mode]).abs()
+                / base.eigenvalues[mode].abs().max(1e-30);
+            assert!(
+                rel_gap < 1.0e-10,
+                "expected low Maxwell eigenmodes to remain stable when requesting more pairs: mode={} rel_gap={}",
+                mode + 1,
+                rel_gap
+            );
+        }
     }
 }
 

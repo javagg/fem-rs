@@ -21,18 +21,6 @@ log          = { workspace = true }
 env_logger   = { workspace = true }
 
 [[example]]
-name = "em_magnetostatics_2d"
-path = "em_magnetostatics_2d.rs"
-
-[[example]]
-name = "par_mesh_verify"
-path = "par_mesh_verify.rs"
-
-[[example]]
-name = "ceed_mass"
-path = "ceed_mass.rs"
-
-[[example]]
 name = "mfem_ex1_poisson"
 path = "mfem_ex1_poisson.rs"
 
@@ -44,17 +32,7 @@ path = "mfem_ex2_elasticity.rs"
 name = "mfem_ex5_mixed_darcy"
 path = "mfem_ex5_mixed_darcy.rs"
 
-[[example]]
-name = "debug_single"
-path = "debug_single.rs"
-
-[[example]]
-name = "debug_interp"
-path = "debug_interp.rs"
-
-[[example]]
-name = "mfem_ex3_hex8_maxwell"
-path = "mfem_ex3_hex8_maxwell.rs"
+# One-to-one MFEM example targets only: mfem_ex* and mfem_pex*.
 
 [[example]]
 name = "mfem_ex9_dg_advection"
@@ -97,20 +75,20 @@ name = "mfem_ex16_nonlinear_heat"
 path = "mfem_ex16_nonlinear_heat.rs"
 
 [[example]]
-name = "pex1_poisson"
-path = "pex1_poisson.rs"
+name = "mfem_pex1_poisson"
+path = "mfem_pex1_poisson.rs"
 
 [[example]]
-name = "pex2_mixed_darcy"
-path = "pex2_mixed_darcy.rs"
+name = "mfem_pex2_mixed_darcy"
+path = "mfem_pex2_mixed_darcy.rs"
 
 [[example]]
-name = "pex3_maxwell"
-path = "pex3_maxwell.rs"
+name = "mfem_pex3_maxwell"
+path = "mfem_pex3_maxwell.rs"
 
 [[example]]
-name = "pex5_darcy"
-path = "pex5_darcy.rs"
+name = "mfem_pex5_darcy"
+path = "mfem_pex5_darcy.rs"
 
 [[example]]
 name = "mfem_ex40"
@@ -149,12 +127,8 @@ name = "mfem_ex14_dc_current"
 path = "mfem_ex14_dc_current.rs"
 
 [[example]]
-name = "pex4_parallel_heat"
-path = "pex4_parallel_heat.rs"
-
-[[example]]
-name = "mfem_ex1_convergence"
-path = "mfem_ex1_convergence.rs"
+name = "mfem_pex4_parallel_heat"
+path = "mfem_pex4_parallel_heat.rs"
 
 [[example]]
 name = "mfem_ex26_geom_mg"
@@ -167,10 +141,6 @@ path = "mfem_ex41_imex.rs"
 [[example]]
 name = "mfem_ex43_hdf5_checkpoint"
 path = "mfem_ex43_hdf5_checkpoint.rs"
-
-[[example]]
-name = "mfem_ex3_firstorder"
-path = "mfem_ex3_firstorder.rs"
 
 [[example]]
 name = "mfem_ex3"
@@ -197,18 +167,6 @@ name = "mfem_ex38_immersed_boundary"
 path = "mfem_ex38_immersed_boundary.rs"
 
 [[example]]
-name = "mfem_dpg_poisson"
-path = "mfem_dpg_poisson.rs"
-
-[[example]]
-name = "mfem_surface_fem"
-path = "mfem_surface_fem.rs"
-
-[[example]]
-name = "mfem_tmop_mesh_quality"
-path = "mfem_tmop_mesh_quality.rs"
-
-[[example]]
 name = "mfem_ex22"
 path = "mfem_ex22.rs"
 
@@ -227,6 +185,10 @@ path = "mfem_ex32.rs"
 [[example]]
 name = "mfem_ex34"
 path = "mfem_ex34.rs"
+
+[[example]]
+name = "mfem_tmop_mesh_quality"
+path = "mfem_tmop_mesh_quality.rs"
 
 [[example]]
 name = "mfem_volta"

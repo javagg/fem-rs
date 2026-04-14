@@ -63,36 +63,20 @@ struct SolveResult {
     /// L² error sampled at half the final time.
     l2_err_half:  f64,
     t_final:      f64,
+    #[allow(dead_code)]
     final_solution: Vec<f64>,
 }
 
 // ─── solve_case ───────────────────────────────────────────────────────────────
 
 fn solve_case(args: &Args) -> SolveResult {
-    let mesh  = SimplexMesh::<2>::unit_square_tri(args.n);
-    let space = HCurlSpace::new(mesh, 1);
+    let (space, bnd_dofs, mass, damp, stiff) = assemble_system(args);
     let n_dof = space.n_dofs();
-
-    let bnd_dofs: Vec<u32> = boundary_dofs_hcurl(space.mesh(), &space, &[1, 2, 3, 4]);
-
-    let mass_integ  = VectorMassIntegrator { alpha: args.eps };
-    let damp_integ  = VectorMassIntegrator { alpha: args.sigma };
-    let stiff_integ = CurlCurlIntegrator   { mu: 1.0 / args.mu };
-
-    let mut mass  = VectorAssembler::assemble_bilinear(&space, &[&mass_integ],  4);
-    let mut damp  = VectorAssembler::assemble_bilinear(&space, &[&damp_integ],  4);
-    let mut stiff = VectorAssembler::assemble_bilinear(&space, &[&stiff_integ], 4);
-
-    let zero_vals = vec![0.0_f64; bnd_dofs.len()];
-    let mut dummy_rhs = vec![0.0_f64; n_dof];
-    apply_dirichlet(&mut mass,  &mut dummy_rhs, &bnd_dofs, &zero_vals);
-    apply_dirichlet(&mut damp,  &mut dummy_rhs, &bnd_dofs, &zero_vals);
-    apply_dirichlet(&mut stiff, &mut dummy_rhs, &bnd_dofs, &zero_vals);
 
     let newmark = Newmark::default(); // β=0.25, γ=0.5
 
     let mut u = vec![0.0_f64; n_dof];
-    let init_vel = project_exact_vel(&space, 0.0);
+    let init_vel = project_exact_vel_scaled(&space, 0.0, args.source_scale);
     let f0 = assemble_force(&space, args, 0.0);
     let mut state = NewmarkState::init_from(init_vel, &mass, &stiff, &u, &f0);
 
@@ -116,11 +100,11 @@ fn solve_case(args: &Args) -> SolveResult {
         );
 
         if !half_recorded && t >= t_half {
-            l2_err_half   = l2_error_hcurl(&space, &u, t);
+            l2_err_half   = l2_error_hcurl_scaled(&space, &u, t, args.source_scale);
             half_recorded = true;
         }
     }
-    let l2_err_final = l2_error_hcurl(&space, &u, t);
+    let l2_err_final = l2_error_hcurl_scaled(&space, &u, t, args.source_scale);
 
     SolveResult {
         n_dof,
@@ -132,12 +116,62 @@ fn solve_case(args: &Args) -> SolveResult {
     }
 }
 
+fn assemble_system(
+    args: &Args,
+) -> (
+    HCurlSpace<SimplexMesh<2>>,
+    Vec<u32>,
+    fem_linalg::CsrMatrix<f64>,
+    fem_linalg::CsrMatrix<f64>,
+    fem_linalg::CsrMatrix<f64>,
+) {
+    let mesh = SimplexMesh::<2>::unit_square_tri(args.n);
+    let space = HCurlSpace::new(mesh, 1);
+    let n_dof = space.n_dofs();
+
+    let bnd_dofs: Vec<u32> = boundary_dofs_hcurl(space.mesh(), &space, &[1, 2, 3, 4]);
+
+    let mass_integ = VectorMassIntegrator { alpha: args.eps };
+    let damp_integ = VectorMassIntegrator { alpha: args.sigma };
+    let stiff_integ = CurlCurlIntegrator { mu: 1.0 / args.mu };
+
+    let mut mass = VectorAssembler::assemble_bilinear(&space, &[&mass_integ], 4);
+    let mut damp = VectorAssembler::assemble_bilinear(&space, &[&damp_integ], 4);
+    let mut stiff = VectorAssembler::assemble_bilinear(&space, &[&stiff_integ], 4);
+
+    let zero_vals = vec![0.0_f64; bnd_dofs.len()];
+    let mut dummy_rhs = vec![0.0_f64; n_dof];
+    apply_dirichlet(&mut mass, &mut dummy_rhs, &bnd_dofs, &zero_vals);
+    apply_dirichlet(&mut damp, &mut dummy_rhs, &bnd_dofs, &zero_vals);
+    apply_dirichlet(&mut stiff, &mut dummy_rhs, &bnd_dofs, &zero_vals);
+
+    (space, bnd_dofs, mass, damp, stiff)
+}
+
+#[cfg(test)]
+fn quadratic_energy(
+    mass: &fem_linalg::CsrMatrix<f64>,
+    stiff: &fem_linalg::CsrMatrix<f64>,
+    u: &[f64],
+    vel: &[f64],
+) -> f64 {
+    let mut mv = vec![0.0_f64; vel.len()];
+    let mut ku = vec![0.0_f64; u.len()];
+    mass.spmv(vel, &mut mv);
+    stiff.spmv(u, &mut ku);
+
+    let kinetic = 0.5 * vel.iter().zip(mv.iter()).map(|(a, b)| a * b).sum::<f64>();
+    let potential = 0.5 * u.iter().zip(ku.iter()).map(|(a, b)| a * b).sum::<f64>();
+    kinetic + potential
+}
+
 fn main() {
     let args = parse_args();
 
     println!("=== fem-rs: Time-domain Maxwell (Newmark-β) ===");
     println!("  Mesh: {}×{}, ε={:.2}, μ={:.2}, σ={:.2}", args.n, args.n, args.eps, args.mu, args.sigma);
     println!("  dt={:.4}, T={:.2}", args.dt, args.t_end);
+    println!("  Source scale={:.2}", args.source_scale);
 
     let result = solve_case(&args);
 
@@ -161,7 +195,7 @@ mod tests {
     }
 
     fn base_args() -> Args {
-        Args { n: 8, dt: 0.05, t_end: 0.5, eps: 1.0, mu: 1.0, sigma: 0.0 }
+        Args { n: 8, dt: 0.05, t_end: 0.5, eps: 1.0, mu: 1.0, sigma: 0.0, source_scale: 1.0 }
     }
 
     /// L² error at final time must be within a reasonable threshold for
@@ -241,7 +275,84 @@ mod tests {
         assert!(e_m < e_c, "expected temporal refinement to reduce self-error: coarse={} medium={}", e_c, e_m);
         assert!(e_c / e_m > 2.0, "expected near second-order temporal improvement; ratio={}", e_c / e_m);
     }
-}
+
+    #[test]
+    fn ex10_maxwell_time_free_response_energy_stays_bounded_without_damping() {
+        let args = Args { n: 8, dt: 0.02, t_end: 0.6, eps: 1.0, mu: 1.0, sigma: 0.0, source_scale: 1.0 };
+        let (space, bnd_dofs, mass, damp, stiff) = assemble_system(&args);
+
+        let newmark = Newmark::default();
+        let mut u = vec![0.0_f64; space.n_dofs()];
+        let init_vel = project_exact_vel_scaled(&space, 0.0, args.source_scale);
+        let f0 = vec![0.0_f64; space.n_dofs()];
+        let mut state = NewmarkState::init_from(init_vel, &mass, &stiff, &u, &f0);
+
+        let e0 = quadratic_energy(&mass, &stiff, &u, &state.vel);
+        let mut e_min = e0;
+        let mut e_max = e0;
+
+        for _ in 0..args.n_steps() {
+            let force = vec![0.0_f64; space.n_dofs()];
+            newmark_damped_step(&mass, &damp, &stiff, &force, args.dt, &newmark, &mut u, &mut state, &bnd_dofs);
+            let en = quadratic_energy(&mass, &stiff, &u, &state.vel);
+            e_min = e_min.min(en);
+            e_max = e_max.max(en);
+        }
+
+        let rel_span = (e_max - e_min) / e0.max(1e-30);
+        assert!(rel_span < 0.08, "undamped free-response energy span too large: {}", rel_span);
+    }
+
+    #[test]
+    fn ex10_maxwell_time_free_response_energy_decays_with_damping() {
+        let args = Args { n: 8, dt: 0.02, t_end: 0.6, eps: 1.0, mu: 1.0, sigma: 0.5, source_scale: 1.0 };
+        let (space, bnd_dofs, mass, damp, stiff) = assemble_system(&args);
+
+        let newmark = Newmark::default();
+        let mut u = vec![0.0_f64; space.n_dofs()];
+        let init_vel = project_exact_vel_scaled(&space, 0.0, args.source_scale);
+        let f0 = vec![0.0_f64; space.n_dofs()];
+        let mut state = NewmarkState::init_from(init_vel, &mass, &stiff, &u, &f0);
+
+        let e0 = quadratic_energy(&mass, &stiff, &u, &state.vel);
+        for _ in 0..args.n_steps() {
+            let force = vec![0.0_f64; space.n_dofs()];
+            newmark_damped_step(&mass, &damp, &stiff, &force, args.dt, &newmark, &mut u, &mut state, &bnd_dofs);
+        }
+        let e1 = quadratic_energy(&mass, &stiff, &u, &state.vel);
+        let rel_decay = (e0 - e1) / e0.max(1e-30);
+
+        assert!(e1 < e0, "damped free response should lose energy: before={} after={}", e0, e1);
+        assert!(rel_decay > 0.05, "expected at least 5% energy decay, got {}", rel_decay);
+        }
+
+    #[test]
+    fn ex10_maxwell_time_solution_scales_linearly_with_source_amplitude() {
+        let mut half = base_args();
+        half.source_scale = 0.5;
+        let mut full = base_args();
+        full.source_scale = 1.0;
+
+        let rh = solve_case(&half);
+        let rf = solve_case(&full);
+
+        let norm_half = rh.final_solution.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let norm_full = rf.final_solution.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let ratio = norm_full / norm_half.max(1e-30);
+        let err_ratio = rf.l2_err_final / rh.l2_err_final.max(1e-30);
+
+        assert!(
+            (ratio - 2.0).abs() < 1.0e-6,
+            "expected final solution norm to scale linearly, got ratio {}",
+            ratio
+        );
+        assert!(
+            (err_ratio - 2.0).abs() < 1.0e-6,
+            "expected final error to scale linearly with source amplitude, got ratio {}",
+            err_ratio
+        );
+    }
+    }
 
 // ─── Damped Newmark step: ε M ü + σ M u̇ + K u = f ──────────────────────────
 //
@@ -368,6 +479,7 @@ struct MaxwellTimeForce {
     eps:   f64,
     sigma: f64,
     mu:    f64,
+    source_scale: f64,
 }
 
 impl VectorLinearIntegrator for MaxwellTimeForce {
@@ -384,12 +496,16 @@ impl VectorLinearIntegrator for MaxwellTimeForce {
         let w2 = OMEGA * OMEGA;
 
         // J = ε(-ω²)sin(ωt) E₀ + σ ω cos(ωt) E₀ + sin(ωt)/μ curl curl E₀
-        let jx = self.eps * (-w2) * sin_wt * e0x
+         let jx = self.source_scale * (
+                 self.eps * (-w2) * sin_wt * e0x
                + self.sigma * OMEGA * cos_wt * e0x
-               + sin_wt / self.mu * curl2_e0x;
-        let jy = self.eps * (-w2) * sin_wt * e0y
+               + sin_wt / self.mu * curl2_e0x
+             );
+         let jy = self.source_scale * (
+                 self.eps * (-w2) * sin_wt * e0y
                + self.sigma * OMEGA * cos_wt * e0y
-               + sin_wt / self.mu * curl2_e0y;
+               + sin_wt / self.mu * curl2_e0y
+             );
 
         for i in 0..qp.n_dofs {
             let dot = qp.phi_vec[i * 2] * jx + qp.phi_vec[i * 2 + 1] * jy;
@@ -399,25 +515,31 @@ impl VectorLinearIntegrator for MaxwellTimeForce {
 }
 
 fn assemble_force(space: &HCurlSpace<SimplexMesh<2>>, args: &Args, t: f64) -> Vec<f64> {
-    let integ = MaxwellTimeForce { t, eps: args.eps, sigma: args.sigma, mu: args.mu };
+    let integ = MaxwellTimeForce {
+        t,
+        eps: args.eps,
+        sigma: args.sigma,
+        mu: args.mu,
+        source_scale: args.source_scale,
+    };
     VectorAssembler::assemble_linear(space, &[&integ], 4)
 }
 
 // ─── Initial velocity: Ė(0) = ω E₀ ─────────────────────────────────────────
 
-fn project_exact_vel(space: &HCurlSpace<SimplexMesh<2>>, t: f64) -> Vec<f64> {
+fn project_exact_vel_scaled(space: &HCurlSpace<SimplexMesh<2>>, t: f64, source_scale: f64) -> Vec<f64> {
     // Ė = ω cos(ωt) E₀  �? at t=0: Ė(0) = ω E₀
     let cos_wt = (OMEGA * t).cos();
     let vel_fn = |x: &[f64]| vec![
-        OMEGA * cos_wt * (PI * x[1]).sin(),
-        OMEGA * cos_wt * (PI * x[0]).sin(),
+        source_scale * OMEGA * cos_wt * (PI * x[1]).sin(),
+        source_scale * OMEGA * cos_wt * (PI * x[0]).sin(),
     ];
     space.interpolate_vector(&vel_fn).as_slice().to_vec()
 }
 
 // ─── L² error ────────────────────────────────────────────────────────────────
 
-fn l2_error_hcurl(space: &HCurlSpace<SimplexMesh<2>>, uh: &[f64], t: f64) -> f64 {
+fn l2_error_hcurl_scaled(space: &HCurlSpace<SimplexMesh<2>>, uh: &[f64], t: f64, source_scale: f64) -> f64 {
     let mesh      = space.mesh();
     let ref_elem  = TriND1;
     let quad      = ref_elem.quadrature(6);
@@ -458,8 +580,8 @@ fn l2_error_hcurl(space: &HCurlSpace<SimplexMesh<2>>, uh: &[f64], t: f64) -> f64
             }
 
             // Exact: E = sin(ωt) * (sin(πy), sin(πx))
-            let ex = sin_wt * (PI * xp[1]).sin();
-            let ey = sin_wt * (PI * xp[0]).sin();
+            let ex = source_scale * sin_wt * (PI * xp[1]).sin();
+            let ey = source_scale * sin_wt * (PI * xp[0]).sin();
 
             let dx = eh[0] - ex; let dy = eh[1] - ey;
             err2 += w * (dx*dx + dy*dy);
@@ -470,14 +592,14 @@ fn l2_error_hcurl(space: &HCurlSpace<SimplexMesh<2>>, uh: &[f64], t: f64) -> f64
 
 // ─── CLI ─────────────────────────────────────────────────────────────────────
 
-struct Args { n: usize, dt: f64, t_end: f64, eps: f64, mu: f64, sigma: f64 }
+struct Args { n: usize, dt: f64, t_end: f64, eps: f64, mu: f64, sigma: f64, source_scale: f64 }
 
 impl Args {
     fn n_steps(&self) -> usize { (self.t_end / self.dt).round() as usize }
 }
 
 fn parse_args() -> Args {
-    let mut a = Args { n: 16, dt: 0.05, t_end: 1.0, eps: 1.0, mu: 1.0, sigma: 0.0 };
+    let mut a = Args { n: 16, dt: 0.05, t_end: 1.0, eps: 1.0, mu: 1.0, sigma: 0.0, source_scale: 1.0 };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -487,6 +609,7 @@ fn parse_args() -> Args {
             "--eps"    => { a.eps    = it.next().unwrap_or("1.0".into()).parse().unwrap_or(1.0); }
             "--mu"     => { a.mu     = it.next().unwrap_or("1.0".into()).parse().unwrap_or(1.0); }
             "--sigma"  => { a.sigma  = it.next().unwrap_or("0.0".into()).parse().unwrap_or(0.0); }
+            "--source-scale" => { a.source_scale = it.next().unwrap_or("1.0".into()).parse().unwrap_or(1.0); }
             _ => {}
         }
     }

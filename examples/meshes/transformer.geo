@@ -1,4 +1,4 @@
-// Transformer cross-section for em_magnetostatics_2d --case transformer
+// Transformer cross-section benchmark geometry
 // Usage: gmsh transformer.geo -2 -o transformer.msh -format msh4
 
 SetFactory("OpenCASCADE");
