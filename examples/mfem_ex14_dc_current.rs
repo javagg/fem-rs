@@ -52,8 +52,10 @@ struct CaseResult {
     final_residual: f64,
     converged: bool,
     phi_l2: f64,
+    phi_rms_error: f64,
     phi_at_interface: f64,
     phi_interface_exact: f64,
+    phi_checksum: f64,
 }
 
 fn main() {
@@ -81,6 +83,8 @@ fn main() {
         result.phi_interface_exact,
         (result.phi_at_interface - result.phi_interface_exact).abs()
     );
+    println!("  RMS nodal error vs layered exact profile = {:.3e}", result.phi_rms_error);
+    println!("  checksum(phi) = {:.8e}", result.phi_checksum);
 
     if let Some(ref path) = args.vtk {
         let (_, _, phi, e_field, j_field) = solve_case_with_fields(&args);
@@ -114,6 +118,14 @@ fn main() {
 fn solve_case(args: &Args) -> CaseResult {
     let (result, _, _, _, _) = solve_case_with_fields(args);
     result
+}
+
+fn exact_phi(x: f64, sigma1: f64, sigma2: f64, voltage: f64) -> f64 {
+    if x <= 0.5 {
+        voltage * (2.0 * sigma2 * x) / (sigma1 + sigma2)
+    } else {
+        voltage * (1.0 - (2.0 * sigma1 * (1.0 - x)) / (sigma1 + sigma2))
+    }
 }
 
 fn solve_case_with_fields(args: &Args) -> (CaseResult, H1Space<SimplexMesh<2>>, Vec<f64>, Vec<f64>, Vec<f64>) {
@@ -208,6 +220,20 @@ fn solve_case_with_fields(args: &Args) -> (CaseResult, H1Space<SimplexMesh<2>>, 
     }
 
     let phi_l2 = phi.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let phi_checksum = phi
+        .iter()
+        .enumerate()
+        .map(|(i, value)| (i as f64 + 1.0) * value)
+        .sum();
+    let phi_err2: f64 = (0..space.mesh().n_nodes())
+        .map(|i| {
+            let x = space.mesh().node_coords(i as u32);
+            let exact = exact_phi(x[0], sigma1, sigma2, args.voltage);
+            let diff = phi[i] - exact;
+            diff * diff
+        })
+        .sum();
+    let phi_rms_error = (phi_err2 / space.mesh().n_nodes() as f64).sqrt();
 
     (
         CaseResult {
@@ -215,8 +241,10 @@ fn solve_case_with_fields(args: &Args) -> (CaseResult, H1Space<SimplexMesh<2>>, 
             final_residual: res.final_residual,
             converged: res.converged,
             phi_l2,
+            phi_rms_error,
             phi_at_interface,
             phi_interface_exact,
+            phi_checksum,
         },
         space,
         phi,
@@ -289,6 +317,9 @@ mod tests {
             result.phi_at_interface,
             result.phi_interface_exact
         );
+        assert!(result.phi_rms_error < 1.0e-10,
+            "exact layered profile should be reproduced nodally, got RMS error {}",
+            result.phi_rms_error);
     }
 
     #[test]
@@ -322,6 +353,11 @@ mod tests {
             "expected interface potential to scale linearly with voltage, got ratio {}",
             interface_ratio
         );
+        assert!(
+            (full.phi_checksum / half.phi_checksum - 2.0).abs() < 1.0e-10,
+            "expected checksum to scale linearly with voltage, got ratio {}",
+            full.phi_checksum / half.phi_checksum
+        );
     }
 
     #[test]
@@ -348,6 +384,51 @@ mod tests {
             mild_contrast.phi_at_interface,
             strong_contrast.phi_at_interface
         );
+    }
+
+    #[test]
+    fn ex14_dc_current_zero_voltage_gives_trivial_solution() {
+        let result = solve_case(&Args {
+            n: 8,
+            sigma1: 1.0,
+            sigma2: 10.0,
+            voltage: 0.0,
+            vtk: None,
+        });
+
+        assert!(result.converged);
+        assert!(result.phi_l2 < 1.0e-14, "expected zero potential norm, got {}", result.phi_l2);
+        assert!(result.phi_checksum.abs() < 1.0e-14,
+            "expected zero checksum, got {}", result.phi_checksum);
+        assert!(result.phi_rms_error < 1.0e-14,
+            "expected zero exact-profile error, got {}", result.phi_rms_error);
+    }
+
+    #[test]
+    fn ex14_dc_current_refinement_preserves_exact_layered_profile() {
+        let coarse = solve_case(&Args {
+            n: 4,
+            sigma1: 1.0,
+            sigma2: 10.0,
+            voltage: 1.0,
+            vtk: None,
+        });
+        let fine = solve_case(&Args {
+            n: 16,
+            sigma1: 1.0,
+            sigma2: 10.0,
+            voltage: 1.0,
+            vtk: None,
+        });
+
+        assert!(coarse.converged && fine.converged);
+        assert!(coarse.phi_rms_error < 5.0e-12,
+            "coarse grid should retain machine-precision exact-profile agreement: {}",
+            coarse.phi_rms_error);
+        assert!(fine.phi_rms_error < 5.0e-12,
+            "fine grid should retain machine-precision exact-profile agreement: {}",
+            fine.phi_rms_error);
+        assert!((fine.phi_at_interface - fine.phi_interface_exact).abs() < 1.0e-10);
     }
 }
 

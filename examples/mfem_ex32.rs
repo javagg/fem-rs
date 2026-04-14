@@ -40,6 +40,7 @@ fn main() {
     );
     println!("  h = {:.4e},  L² error = {:.4e}", result.h, result.l2_error);
     println!("  ||u||₂ = {:.4e}", result.solution_l2);
+    println!("  checksum = {:.8e}", result.solution_checksum);
 }
 
 struct CaseResult {
@@ -50,6 +51,7 @@ struct CaseResult {
     h: f64,
     l2_error: f64,
     solution_l2: f64,
+    solution_checksum: f64,
 }
 
 fn solve_case(n: usize) -> CaseResult {
@@ -81,6 +83,11 @@ fn solve_case_with_gamma_and_scale_and_field(n: usize, gamma: f64, scale: f64) -
     let n_dofs = problem.n_dofs();
     let solved = problem.solve();
     let solution_l2 = solved.solution.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let solution_checksum = solved.solution
+        .iter()
+        .enumerate()
+        .map(|(i, value)| (i as f64 + 1.0) * value)
+        .sum::<f64>();
 
     (
         CaseResult {
@@ -91,6 +98,7 @@ fn solve_case_with_gamma_and_scale_and_field(n: usize, gamma: f64, scale: f64) -
             h: 1.0 / n as f64,
             l2_error: l2_error_hcurl_exact(&solved.space, &solved.solution, |x| exact_field(x, scale)),
             solution_l2,
+            solution_checksum,
         },
         solved.solution,
     )
@@ -112,6 +120,11 @@ fn solve_case_with_gamma_and_scale_and_field(n: usize, gamma: f64, scale: f64) -
     let n_dofs = problem.n_dofs();
     let solved = problem.solve();
     let solution_l2 = solved.solution.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let solution_checksum = solved.solution
+        .iter()
+        .enumerate()
+        .map(|(i, value)| (i as f64 + 1.0) * value)
+        .sum::<f64>();
 
     (
         CaseResult {
@@ -122,6 +135,7 @@ fn solve_case_with_gamma_and_scale_and_field(n: usize, gamma: f64, scale: f64) -
             h: 1.0 / n as f64,
             l2_error: l2_error_hcurl_exact(&solved.space, &solved.solution, |x| exact_field(x, scale)),
             solution_l2,
+            solution_checksum,
         },
         solved.solution,
     )
@@ -228,10 +242,16 @@ mod tests {
 
         assert!(half.converged && full.converged);
         let ratio = full.solution_l2 / half.solution_l2.max(1.0e-30);
+        let checksum_linearity_error = (full.solution_checksum - 2.0 * half.solution_checksum).abs();
         assert!(
             (ratio - 2.0).abs() < 1.0e-6,
             "expected linear response to impedance-boundary drive scaling, got ratio {}",
             ratio
+        );
+        assert!(
+            checksum_linearity_error < 1.0e-10,
+            "expected impedance checksum linearity, got residual {}",
+            checksum_linearity_error
         );
     }
 
@@ -261,5 +281,19 @@ mod tests {
             "expected impedance solution norm to remain invariant under sign reversal, got relative gap {}",
             norm_rel_gap
         );
+        assert!((positive.solution_checksum + negative.solution_checksum).abs() < 1.0e-10,
+            "checksum should flip sign: positive={} negative={}",
+            positive.solution_checksum,
+            negative.solution_checksum);
+    }
+
+    #[test]
+    fn impedance_maxwell_zero_drive_gives_trivial_solution() {
+        let result = solve_case_with_gamma_and_scale(8, DEFAULT_GAMMA, 0.0);
+        assert!(result.converged);
+        assert!(result.solution_l2 < 1.0e-14, "expected zero solution norm, got {}", result.solution_l2);
+        assert!(result.solution_checksum.abs() < 1.0e-14,
+            "expected zero checksum, got {}", result.solution_checksum);
+        assert!(result.l2_error < 1.0e-14, "expected zero manufactured-solution error, got {}", result.l2_error);
     }
 }

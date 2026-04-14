@@ -26,7 +26,7 @@ use std::f64::consts::PI;
 
 use fem_assembly::{Assembler, GridFunction, standard::{DiffusionIntegrator, DomainSourceIntegrator, MassIntegrator}};
 use fem_linalg::{CooMatrix, CsrMatrix};
-use fem_mesh::SimplexMesh;
+use fem_mesh::{MeshTopology, SimplexMesh};
 use fem_space::{H1Space, constraints::boundary_dofs, fe_space::FESpace};
 use nalgebra::{DMatrix, DVector, linalg::{Cholesky, SymmetricEigen}};
 
@@ -42,6 +42,9 @@ fn main() {
     println!("  Exact first eigenvalue:       {:.8}", result.exact_first_eigenvalue);
     println!("  Relative eigenvalue error:    {:.3e}", result.first_eigenvalue_rel_error);
     println!("  L2 error vs exact mode:       {:.3e}", result.l2_error);
+    println!("  ||u_h||_2:                    {:.8e}", result.solution_l2);
+    println!("  checksum(u_h):                {:.8e}", result.solution_checksum);
+    println!("  u_h(0.5,0.5) ≈                {:.8e}", result.center_value);
     println!();
     println!("Note: this is a dense spectral baseline for ex33; scalable rational/extension-based fractional operators are still pending.");
 }
@@ -59,6 +62,9 @@ struct FractionalResult {
     exact_first_eigenvalue: f64,
     first_eigenvalue_rel_error: f64,
     l2_error: f64,
+    solution_l2: f64,
+    solution_checksum: f64,
+    center_value: f64,
 }
 
 fn parse_args() -> Args {
@@ -116,6 +122,21 @@ fn solve_fractional_problem(n: usize, s: f64) -> FractionalResult {
 
     let gf = GridFunction::new(&space, full_solution);
     let l2_error = gf.compute_l2_error(&exact_mode, 4);
+    let solution_l2 = gf.dofs().iter().map(|value| value * value).sum::<f64>().sqrt();
+    let solution_checksum = gf.dofs()
+        .iter()
+        .enumerate()
+        .map(|(i, value)| (i as f64 + 1.0) * value)
+        .sum();
+    let center_value = (0..space.mesh().n_nodes() as u32)
+        .map(|node| {
+            let x = space.mesh().node_coords(node);
+            let dist2 = (x[0] - 0.5).powi(2) + (x[1] - 0.5).powi(2);
+            (dist2, gf.dofs()[node as usize])
+        })
+        .min_by(|a, b| a.0.partial_cmp(&b.0).expect("finite center distance"))
+        .map(|(_, value)| value)
+        .expect("fractional Laplacian mesh has no nodes");
 
     FractionalResult {
         free_dofs: free.len(),
@@ -123,6 +144,9 @@ fn solve_fractional_problem(n: usize, s: f64) -> FractionalResult {
         exact_first_eigenvalue: lambda_exact,
         first_eigenvalue_rel_error: ((eigenvalues[0] - lambda_exact) / lambda_exact).abs(),
         l2_error,
+        solution_l2,
+        solution_checksum,
+        center_value,
     }
 }
 
@@ -188,11 +212,16 @@ fn generalized_eigendecomposition(k: &CsrMatrix<f64>, m: &CsrMatrix<f64>) -> (Ve
 mod tests {
     use super::*;
 
+    fn rel_diff(a: f64, b: f64) -> f64 {
+        (a - b).abs() / a.abs().max(b.abs()).max(1.0)
+    }
+
     #[test]
     fn ex33_fractional_first_mode_is_recovered_for_s_half() {
         let result = solve_fractional_problem(8, 0.5);
         assert!(result.first_eigenvalue_rel_error < 8.0e-2, "first eigenvalue rel error = {}", result.first_eigenvalue_rel_error);
         assert!(result.l2_error < 7.0e-2, "L2 error = {}", result.l2_error);
+        assert!((result.center_value - 1.0).abs() < 8.0e-2, "center value = {}", result.center_value);
     }
 
     #[test]
@@ -200,5 +229,48 @@ mod tests {
         let result = solve_fractional_problem(8, 0.25);
         assert!(result.first_eigenvalue_rel_error < 8.0e-2, "first eigenvalue rel error = {}", result.first_eigenvalue_rel_error);
         assert!(result.l2_error < 7.0e-2, "L2 error = {}", result.l2_error);
+        assert!((result.center_value - 1.0).abs() < 8.0e-2, "center value = {}", result.center_value);
+    }
+
+    #[test]
+    fn ex33_fractional_refinement_reduces_first_mode_error() {
+        let coarse = solve_fractional_problem(6, 0.5);
+        let fine = solve_fractional_problem(12, 0.5);
+
+        assert!(fine.first_eigenvalue_rel_error < coarse.first_eigenvalue_rel_error,
+            "expected eigenvalue error to improve under refinement: coarse={} fine={}",
+            coarse.first_eigenvalue_rel_error,
+            fine.first_eigenvalue_rel_error);
+        assert!(fine.l2_error < coarse.l2_error,
+            "expected L2 error to improve under refinement: coarse={} fine={}",
+            coarse.l2_error,
+            fine.l2_error);
+    }
+
+    #[test]
+    fn ex33_fractional_manufactured_first_mode_remains_consistent_across_s_scan() {
+        let small_s = solve_fractional_problem(8, 0.2);
+        let half_s = solve_fractional_problem(8, 0.5);
+        let large_s = solve_fractional_problem(8, 0.8);
+
+        assert!(rel_diff(small_s.solution_l2, half_s.solution_l2) < 2.0e-2,
+            "solution norm drift across s is too large: small={} half={}",
+            small_s.solution_l2,
+            half_s.solution_l2);
+        assert!(rel_diff(half_s.solution_l2, large_s.solution_l2) < 2.0e-2,
+            "solution norm drift across s is too large: half={} large={}",
+            half_s.solution_l2,
+            large_s.solution_l2);
+        assert!(rel_diff(small_s.solution_checksum, half_s.solution_checksum) < 2.0e-2,
+            "solution checksum drift across s is too large: small={} half={}",
+            small_s.solution_checksum,
+            half_s.solution_checksum);
+        assert!(rel_diff(half_s.solution_checksum, large_s.solution_checksum) < 2.0e-2,
+            "solution checksum drift across s is too large: half={} large={}",
+            half_s.solution_checksum,
+            large_s.solution_checksum);
+        assert!((small_s.center_value - 1.0).abs() < 8.0e-2);
+        assert!((half_s.center_value - 1.0).abs() < 8.0e-2);
+        assert!((large_s.center_value - 1.0).abs() < 8.0e-2);
     }
 }

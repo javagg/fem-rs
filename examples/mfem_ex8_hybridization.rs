@@ -1,4 +1,4 @@
-//! # Example 8 �?Static Condensation baseline (toward MFEM ex8/hybr)
+//! # Example 8 -- Static Condensation baseline (toward MFEM ex8/hybr)
 //!
 //! This example demonstrates the algebraic static-condensation primitive used by
 //! fem-rs non-conforming constraints:
@@ -38,6 +38,8 @@ fn main() {
         "  reduced-system agreement max(|u_free - u_ref|) = {:.3e}",
         result.free_dof_mismatch
     );
+    println!("  ||u||_2 = {:.3e}", result.solution_norm);
+    println!("  checksum = {:.8e}", result.solution_checksum);
     println!();
     println!("Note: this is the algebraic baseline toward ex8/hybridization; mixed/hybrid FEM kernels are still pending.");
 }
@@ -48,6 +50,8 @@ struct CaseResult {
     converged: bool,
     hanging_consistency: f64,
     free_dof_mismatch: f64,
+    solution_norm: f64,
+    solution_checksum: f64,
 }
 
 fn run_case(rhs_scale: f64) -> CaseResult {
@@ -78,12 +82,19 @@ fn run_case(rhs_scale: f64) -> CaseResult {
         verbose: false,
         ..SolverConfig::default()
     };
-    let solve = solve_pcg_jacobi(&mat, &rhs, &mut x, &cfg).expect("PCG solve failed in ex8 baseline");
+    let solve =
+        solve_pcg_jacobi(&mat, &rhs, &mut x, &cfg).expect("PCG solve failed in ex8 baseline");
     recover_hanging_values(&mut x, &constraints);
 
     let x_ref = solve_reduced_reference(a, b);
     let hanging_consistency = (x[2] - 0.5 * (x[0] + x[1])).abs();
     let free_dof_mismatch = (x[0] - x_ref[0]).abs().max((x[1] - x_ref[1]).abs());
+    let solution_norm = x.iter().map(|value| value * value).sum::<f64>().sqrt();
+    let solution_checksum = x
+        .iter()
+        .enumerate()
+        .map(|(i, value)| (i as f64 + 1.0) * value)
+        .sum();
 
     CaseResult {
         iterations: solve.iterations,
@@ -91,6 +102,8 @@ fn run_case(rhs_scale: f64) -> CaseResult {
         converged: solve.converged,
         hanging_consistency,
         free_dof_mismatch,
+        solution_norm,
+        solution_checksum,
     }
 }
 
@@ -182,5 +195,50 @@ mod tests {
         assert!(a.converged && b.converged);
         assert!(a.free_dof_mismatch < 1e-10);
         assert!(b.free_dof_mismatch < 1e-10);
+        assert!(
+            (b.solution_norm / a.solution_norm - 3.0).abs() < 1.0e-12,
+            "solution norm ratio mismatch: a={} b={}",
+            a.solution_norm,
+            b.solution_norm
+        );
+        assert!(
+            (b.solution_checksum / a.solution_checksum - 3.0).abs() < 1.0e-12,
+            "solution checksum ratio mismatch: a={} b={}",
+            a.solution_checksum,
+            b.solution_checksum
+        );
+    }
+
+    #[test]
+    fn ex8_static_condensation_zero_rhs_gives_trivial_solution() {
+        let result = run_case(0.0);
+        assert!(result.converged);
+        assert!(result.hanging_consistency < 1.0e-12);
+        assert!(result.free_dof_mismatch < 1.0e-12);
+        assert!(result.solution_norm < 1.0e-14, "expected zero solution norm, got {}", result.solution_norm);
+        assert!(
+            result.solution_checksum.abs() < 1.0e-14,
+            "expected zero checksum, got {}",
+            result.solution_checksum
+        );
+    }
+
+    #[test]
+    fn ex8_static_condensation_sign_reversed_rhs_flips_solution() {
+        let positive = run_case(1.0);
+        let negative = run_case(-1.0);
+        assert!(positive.converged && negative.converged);
+        assert!(
+            (positive.solution_norm - negative.solution_norm).abs() < 1.0e-12,
+            "solution norm should be sign-invariant: positive={} negative={}",
+            positive.solution_norm,
+            negative.solution_norm
+        );
+        assert!(
+            (positive.solution_checksum + negative.solution_checksum).abs() < 1.0e-12,
+            "checksum should flip sign: positive={} negative={}",
+            positive.solution_checksum,
+            negative.solution_checksum
+        );
     }
 }

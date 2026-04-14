@@ -23,6 +23,29 @@ use fem_space::constraints::{apply_dirichlet, apply_hanging_constraints, recover
 use fem_element::{ReferenceElement, lagrange::TetP1};
 use std::f64::consts::PI;
 
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone)]
+struct PlumbingLevelResult {
+    level: usize,
+    n_elems: usize,
+    n_nodes: usize,
+    n_hanging: usize,
+    n_marked: usize,
+    max_linear_error: f64,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone)]
+struct SolveLevelResult {
+    level: usize,
+    n_elems: usize,
+    n_nodes: usize,
+    n_hanging: usize,
+    n_marked: usize,
+    l2_error: f64,
+    residual: f64,
+}
+
 fn main() {
     let args = parse_args();
 
@@ -105,6 +128,80 @@ fn nodal_linear_field(mesh: &SimplexMesh<3>) -> Vec<f64> {
             c[0] + c[1] + c[2]
         })
         .collect()
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn run_plumbing_case(n0: usize, levels: usize, fraction: f64) -> Vec<PlumbingLevelResult> {
+    let mut mesh = SimplexMesh::<3>::unit_cube_tet(n0);
+    let mut nc3 = NCState3D::new();
+    let mut u = nodal_linear_field(&mesh);
+    let mut results = Vec::new();
+
+    for level in 0..=levels {
+        let n_hanging = nc3.constraints().len();
+        let max_err = max_linear_error(&mesh, &u);
+        let marked = if level < levels {
+            mark_closest_to_center(&mesh, fraction)
+        } else {
+            Vec::new()
+        };
+
+        results.push(PlumbingLevelResult {
+            level,
+            n_elems: mesh.n_elems(),
+            n_nodes: mesh.n_nodes(),
+            n_hanging,
+            n_marked: marked.len(),
+            max_linear_error: max_err,
+        });
+
+        if level == levels || marked.is_empty() {
+            break;
+        }
+
+        let (new_mesh, _constraints, midpoint_map, _hanging_faces) = nc3.refine(&mesh, &marked);
+        let new_u = prolongate_p1(&u, new_mesh.n_nodes(), &midpoint_map);
+        mesh = new_mesh;
+        u = new_u;
+    }
+
+    results
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn run_solve_case(n0: usize, levels: usize, fraction: f64) -> Vec<SolveLevelResult> {
+    let mut mesh = SimplexMesh::<3>::unit_cube_tet(n0);
+    let mut nc3 = NCState3D::new();
+    let mut results = Vec::new();
+
+    for level in 0..=levels {
+        let n_hanging = nc3.constraints().len();
+        let (_u, l2_error, residual) = solve_level_poisson(&mesh, nc3.constraints());
+        let marked = if level < levels {
+            mark_closest_to_center(&mesh, fraction)
+        } else {
+            Vec::new()
+        };
+
+        results.push(SolveLevelResult {
+            level,
+            n_elems: mesh.n_elems(),
+            n_nodes: mesh.n_nodes(),
+            n_hanging,
+            n_marked: marked.len(),
+            l2_error,
+            residual,
+        });
+
+        if level == levels || marked.is_empty() {
+            break;
+        }
+
+        let (new_mesh, _constraints, _midpoint_map, _hanging_faces) = nc3.refine(&mesh, &marked);
+        mesh = new_mesh;
+    }
+
+    results
 }
 
 fn max_linear_error(mesh: &SimplexMesh<3>, u: &[f64]) -> f64 {
@@ -304,5 +401,53 @@ fn l2_error_tet_p1<S: FESpace>(
     }
 
     err2.sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ex15_tet_nc_plumbing_preserves_linear_field_exactly() {
+        let levels = run_plumbing_case(1, 3, 0.30);
+        assert_eq!(levels.len(), 4);
+
+        for level in &levels {
+            assert_eq!(level.max_linear_error, 0.0, "linear P1 field should prolong exactly at level {}", level.level);
+        }
+    }
+
+    #[test]
+    fn ex15_tet_nc_refinement_introduces_hanging_constraints_and_grows_mesh() {
+        let levels = run_plumbing_case(1, 3, 0.30);
+        assert_eq!(levels[0].n_hanging, 0);
+        assert!(levels.iter().skip(1).any(|level| level.n_hanging > 0), "expected non-conforming refinement to create hanging constraints");
+
+        for pair in levels.windows(2) {
+            assert!(pair[1].n_elems > pair[0].n_elems, "element count should grow under refinement: prev={} next={}", pair[0].n_elems, pair[1].n_elems);
+            assert!(pair[1].n_nodes > pair[0].n_nodes, "node count should grow under refinement: prev={} next={}", pair[0].n_nodes, pair[1].n_nodes);
+            assert!(pair[0].n_marked > 0, "each pre-terminal level should mark at least one element");
+        }
+    }
+
+    #[test]
+    fn ex15_tet_nc_solve_mode_reduces_error_and_keeps_residual_small() {
+        let levels = run_solve_case(1, 2, 0.30);
+        assert_eq!(levels.len(), 3);
+        assert_eq!(levels[0].n_hanging, 0);
+        assert!(levels.iter().skip(1).any(|level| level.n_hanging > 0), "solve-mode NC refinement should create hanging constraints");
+
+        for level in &levels {
+            assert!(level.residual < 1.0e-12, "residual too large at level {}: {}", level.level, level.residual);
+        }
+
+        for pair in levels.windows(2) {
+            assert!(pair[1].l2_error < pair[0].l2_error,
+                "L2 error should decrease under 3D NC refinement: prev={} next={}",
+                pair[0].l2_error,
+                pair[1].l2_error);
+            assert!(pair[0].n_marked > 0, "each pre-terminal solve level should mark at least one element");
+        }
+    }
 }
 

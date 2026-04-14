@@ -28,7 +28,7 @@ use fem_assembly::{
     Assembler,
     standard::{DiffusionIntegrator, DomainSourceIntegrator},
 };
-use fem_mesh::{SimplexMesh, topology::MeshTopology};
+use fem_mesh::SimplexMesh;
 use fem_solver::{solve_pcg_jacobi, SolverConfig};
 use fem_space::{
     H1Space,
@@ -36,34 +36,57 @@ use fem_space::{
     constraints::{apply_dirichlet, boundary_dofs},
 };
 
+struct SolveResult {
+    n_dofs: usize,
+    iterations: usize,
+    final_residual: f64,
+    converged: bool,
+    h: f64,
+    l2_error: f64,
+    solution_l2: f64,
+}
+
 fn main() {
     // ─── Parse CLI args ──────────────────────────────────────────────────────
     let args = parse_args();
+    let result = solve_case(args.n, args.order, 1.0);
 
     println!("=== fem-rs Example 1: Poisson equation ===");
     println!("  Mesh:  {}×{} subdivisions, P{} elements", args.n, args.n, args.order);
 
-    // ─── 1. Create mesh ──────────────────────────────────────────────────────
     let mesh = SimplexMesh::<2>::unit_square_tri(args.n);
     println!("  Nodes: {}, Elements: {}", mesh.n_nodes(), mesh.n_elems());
+    println!("  DOFs:  {}", result.n_dofs);
+    println!(
+        "  Solve: {} iterations, residual = {:.3e}, converged = {}",
+        result.iterations, result.final_residual, result.converged
+    );
+    println!("  h = {:.4e},  L² error = {:.4e}", result.h, result.l2_error);
+    println!("  ||u||₂ = {:.4e}", result.solution_l2);
+    println!("  (Expected O(h^{}) for P{} elements)", args.order + 1, args.order);
+
+    println!("\nDone. (No VTK output in this minimal example �?add fem-io to enable.)");
+}
+
+fn solve_case(n_subdiv: usize, order: u8, source_scale: f64) -> SolveResult {
+    // ─── 1. Create mesh ──────────────────────────────────────────────────────
+    let mesh = SimplexMesh::<2>::unit_square_tri(n_subdiv);
 
     // ─── 2. Create H¹ finite element space ──────────────────────────────────
-    let space = H1Space::new(mesh, args.order);
+    let space = H1Space::new(mesh, order);
     let n = space.n_dofs();
-    println!("  DOFs:  {n}");
 
-    // ─── 3. Assemble bilinear form A = �?∇u·∇v dx ───────────────────────────
+    // ─── 3. Assemble bilinear form A = ∫∇u·∇v dx ───────────────────────────
     let diffusion = DiffusionIntegrator { kappa: 1.0 };
-    let mut mat = Assembler::assemble_bilinear(&space, &[&diffusion], args.order as u8 * 2 + 1);
+    let mut mat = Assembler::assemble_bilinear(&space, &[&diffusion], order * 2 + 1);
 
-    // ─── 4. Assemble linear form f = �?2π² sin(πx)sin(πy) v dx ─────────────
+    // ─── 4. Assemble linear form f = ∫2π² sin(πx)sin(πy) v dx ─────────────
     let source = DomainSourceIntegrator::new(|x: &[f64]| {
-        2.0 * PI * PI * (PI * x[0]).sin() * (PI * x[1]).sin()
+        source_scale * 2.0 * PI * PI * (PI * x[0]).sin() * (PI * x[1]).sin()
     });
-    let mut rhs = Assembler::assemble_linear(&space, &[&source], args.order as u8 * 2 + 1);
+    let mut rhs = Assembler::assemble_linear(&space, &[&source], order * 2 + 1);
 
     // ─── 5. Apply homogeneous Dirichlet BCs on all four walls ────────────────
-    //   Tag 1 = bottom (y=0), 2 = right (x=1), 3 = top (y=1), 4 = left (x=0)
     let dm = space.dof_manager();
     let bnd = boundary_dofs(space.mesh(), dm, &[1, 2, 3, 4]);
     let bnd_vals = vec![0.0_f64; bnd.len()];
@@ -75,18 +98,19 @@ fn main() {
     let res = solve_pcg_jacobi(&mat, &rhs, &mut u, &cfg)
         .expect("solver failed");
 
-    println!(
-        "  Solve: {} iterations, residual = {:.3e}, converged = {}",
-        res.iterations, res.final_residual, res.converged
-    );
-
     // ─── 7. L² error against exact solution u = sin(πx)sin(πy) ─────────────
-    let l2 = l2_error_h1(&space, &u, |x: &[f64]| (PI * x[0]).sin() * (PI * x[1]).sin());
-    let h = 1.0 / args.n as f64;
-    println!("  h = {h:.4e},  L² error = {l2:.4e}");
-    println!("  (Expected O(h^{}) for P{} elements)", args.order + 1, args.order);
+    let l2 = l2_error_h1(&space, &u, |x: &[f64]| source_scale * (PI * x[0]).sin() * (PI * x[1]).sin());
+    let solution_l2 = u.iter().map(|v| v * v).sum::<f64>().sqrt();
 
-    println!("\nDone. (No VTK output in this minimal example �?add fem-io to enable.)");
+    SolveResult {
+        n_dofs: n,
+        iterations: res.iterations,
+        final_residual: res.final_residual,
+        converged: res.converged,
+        h: 1.0 / n_subdiv as f64,
+        l2_error: l2,
+        solution_l2,
+    }
 }
 
 // ─── L² error helper ─────────────────────────────────────────────────────────
@@ -155,5 +179,61 @@ fn parse_args() -> Args {
         }
     }
     a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ex1_poisson_coarse_mesh_has_reasonable_error() {
+        let result = solve_case(8, 1, 1.0);
+        assert!(result.converged);
+        assert!(result.final_residual < 1.0e-8, "residual = {}", result.final_residual);
+        assert!(result.l2_error < 2.2e-2, "L2 error = {}", result.l2_error);
+    }
+
+    #[test]
+    fn ex1_poisson_refinement_improves_p1_l2_error() {
+        let coarse = solve_case(8, 1, 1.0);
+        let fine = solve_case(16, 1, 1.0);
+
+        assert!(coarse.converged && fine.converged);
+        assert!(fine.l2_error < coarse.l2_error,
+            "expected refinement to reduce error: coarse={} fine={}",
+            coarse.l2_error, fine.l2_error);
+
+        let observed_order = (coarse.l2_error / fine.l2_error).ln() / (coarse.h / fine.h).ln();
+        assert!(observed_order > 1.5, "observed L2 order too low: {}", observed_order);
+    }
+
+    #[test]
+    fn ex1_poisson_p2_is_more_accurate_than_p1_on_same_mesh() {
+        let p1 = solve_case(8, 1, 1.0);
+        let p2 = solve_case(8, 2, 1.0);
+
+        assert!(p1.converged && p2.converged);
+        assert!(
+            p2.l2_error < p1.l2_error,
+            "expected P2 to improve accuracy on the same mesh: p1={} p2={}",
+            p1.l2_error,
+            p2.l2_error
+        );
+    }
+
+    #[test]
+    fn ex1_poisson_sign_reversed_source_flips_solution() {
+        let positive = solve_case(8, 1, 1.0);
+        let negative = solve_case(8, 1, -1.0);
+
+        assert!(positive.converged && negative.converged);
+        let norm_rel_gap = (positive.solution_l2 - negative.solution_l2).abs()
+            / positive.solution_l2.max(negative.solution_l2).max(1.0e-30);
+        let error_rel_gap = (positive.l2_error - negative.l2_error).abs()
+            / positive.l2_error.max(negative.l2_error).max(1.0e-30);
+
+        assert!(norm_rel_gap < 1.0e-12, "expected solution norm invariance under sign reversal, got {}", norm_rel_gap);
+        assert!(error_rel_gap < 1.0e-12, "expected L2 error invariance under sign reversal, got {}", error_rel_gap);
+    }
 }
 

@@ -30,9 +30,25 @@ use fem_assembly::{
     Assembler, DgAssembler, InteriorFaceList,
     standard::DomainSourceIntegrator,
 };
-use fem_mesh::{SimplexMesh, topology::MeshTopology};
+use fem_mesh::SimplexMesh;
 use fem_solver::{solve_gmres, SolverConfig};
 use fem_space::{L2Space, fe_space::FESpace};
+
+struct SolveResult {
+    n: usize,
+    order: u8,
+    sigma: f64,
+    n_nodes: usize,
+    n_elements: usize,
+    n_dofs: usize,
+    n_interior_faces: usize,
+    iterations: usize,
+    final_residual: f64,
+    converged: bool,
+    l2_error: f64,
+    solution_norm: f64,
+    solution_checksum: f64,
+}
 
 fn main() {
     let args = parse_args();
@@ -40,48 +56,80 @@ fn main() {
     println!("  Mesh: {}×{} subdivisions, P{} DG elements", args.n, args.n, args.order);
     println!("  Penalty σ = {}", args.sigma);
 
-    // ─── 1. Mesh and L² (DG) space ───────────────────────────────────────────
-    let mesh  = SimplexMesh::<2>::unit_square_tri(args.n);
-    println!("  Nodes: {}, Elements: {}", mesh.n_nodes(), mesh.n_elems());
+    let result = solve_case(args.n, args.order, args.sigma, 1.0);
 
-    let space = L2Space::new(mesh, args.order);
-    let n = space.n_dofs();
-    println!("  DOFs: {n}  ({} per element)", n / space.mesh().n_elements());
+    println!("  Nodes: {}, Elements: {}", result.n_nodes, result.n_elements);
+    println!("  DOFs: {}  ({} per element)", result.n_dofs, result.n_dofs / result.n_elements);
+    println!("  Interior faces: {}", result.n_interior_faces);
+    println!("  Effective σ = {:.3}", result.sigma);
+    println!(
+        "  Solve: {} iters, residual = {:.3e}, converged = {}",
+        result.iterations, result.final_residual, result.converged
+    );
+
+    let h = 1.0 / result.n as f64;
+    println!("  h = {h:.4e},  L²(DG) error = {:.4e}", result.l2_error);
+    println!("  ||u_h||_L2 = {:.4e}", result.solution_norm);
+    println!("  checksum = {:.8e}", result.solution_checksum);
+    println!("  (Expected O(h^{}) for P{} DG)", result.order + 1, result.order);
+    println!("\nDone.");
+}
+
+fn solve_case(n: usize, order: u8, sigma: f64, source_scale: f64) -> SolveResult {
+    // ─── 1. Mesh and L² (DG) space ───────────────────────────────────────────
+    let mesh  = SimplexMesh::<2>::unit_square_tri(n);
+
+    let space = L2Space::new(mesh, order);
+    let n_dofs = space.n_dofs();
 
     // ─── 2. Pre-build interior face list ─────────────────────────────────────
     let ifl = InteriorFaceList::build(space.mesh());
-    println!("  Interior faces: {}", ifl.faces.len());
 
     // ─── 3. Assemble SIP stiffness matrix ────────────────────────────────────
     let kappa = 1.0_f64;
-    let mat   = DgAssembler::assemble_sip(&space, &ifl, kappa, args.sigma, args.order * 2 + 1);
+    let mat   = DgAssembler::assemble_sip(&space, &ifl, kappa, sigma, order * 2 + 1);
 
     // ─── 4. Assemble RHS: f = 2π² sin(πx)sin(πy) ────────────────────────────
     let source = DomainSourceIntegrator::new(|x: &[f64]| {
-        2.0 * PI * PI * (PI * x[0]).sin() * (PI * x[1]).sin()
+        source_scale * 2.0 * PI * PI * (PI * x[0]).sin() * (PI * x[1]).sin()
     });
-    let rhs = Assembler::assemble_linear(&space, &[&source], args.order * 2 + 1);
+    let rhs = Assembler::assemble_linear(&space, &[&source], order * 2 + 1);
 
     // Note: Dirichlet BCs are enforced weakly (penalty) by DgAssembler.
     // No explicit row-zeroing needed.
 
     // ─── 5. Solve with GMRES (SIP matrix is symmetric but ill-conditioned) ───
-    let mut u = vec![0.0_f64; n];
+    let mut u = vec![0.0_f64; n_dofs];
     let cfg = SolverConfig { rtol: 1e-10, atol: 0.0, max_iter: 10_000, verbose: false, ..SolverConfig::default() };
     let res = solve_gmres(&mat, &rhs, &mut u, 50, &cfg)
         .expect("DG solve failed");
 
-    println!(
-        "  Solve: {} iters, residual = {:.3e}, converged = {}",
-        res.iterations, res.final_residual, res.converged
-    );
-
     // ─── 6. Element-level L² error ───────────────────────────────────────────
-    let l2 = dg_l2_error(&space, &u, |x: &[f64]| (PI * x[0]).sin() * (PI * x[1]).sin());
-    let h = 1.0 / args.n as f64;
-    println!("  h = {h:.4e},  L²(DG) error = {l2:.4e}");
-    println!("  (Expected O(h^{}) for P{} DG)", args.order + 1, args.order);
-    println!("\nDone.");
+    let l2 = dg_l2_error(&space, &u, |x: &[f64]| {
+        source_scale * (PI * x[0]).sin() * (PI * x[1]).sin()
+    });
+    let solution_norm = u.iter().map(|value| value * value).sum::<f64>().sqrt();
+    let solution_checksum = u
+        .iter()
+        .enumerate()
+        .map(|(i, value)| (i as f64 + 1.0) * value)
+        .sum::<f64>();
+
+    SolveResult {
+        n,
+        order,
+        sigma,
+        n_nodes: space.mesh().n_nodes(),
+        n_elements: space.mesh().n_elems(),
+        n_dofs,
+        n_interior_faces: ifl.faces.len(),
+        iterations: res.iterations,
+        final_residual: res.final_residual,
+        converged: res.converged,
+        l2_error: l2,
+        solution_norm,
+        solution_checksum,
+    }
 }
 
 // ─── DG L² error ─────────────────────────────────────────────────────────────
@@ -141,5 +189,67 @@ fn parse_args() -> Args {
         }
     }
     a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn convergence_rate(coarse: &SolveResult, fine: &SolveResult) -> f64 {
+        let h_coarse = 1.0 / coarse.n as f64;
+        let h_fine = 1.0 / fine.n as f64;
+        (fine.l2_error / coarse.l2_error).ln() / (h_fine / h_coarse).ln()
+    }
+
+    #[test]
+    fn ex9_dg_coarse_case_converges_with_reasonable_error() {
+        let result = solve_case(8, 1, 20.0, 1.0);
+        assert!(result.converged);
+        assert_eq!(result.n_nodes, 81);
+        assert_eq!(result.n_elements, 128);
+        assert_eq!(result.n_dofs, 384);
+        assert_eq!(result.n_interior_faces, 176);
+        assert!((result.sigma - 20.0).abs() < 1.0e-12);
+        assert!(result.final_residual < 1.0e-9, "solver residual too large: {}", result.final_residual);
+        assert!(result.l2_error < 2.0e-2, "coarse-mesh L2 error too large: {}", result.l2_error);
+    }
+
+    #[test]
+    fn ex9_dg_refinement_recovers_second_order_convergence() {
+        let coarse = solve_case(8, 1, 20.0, 1.0);
+        let medium = solve_case(16, 1, 20.0, 1.0);
+        let fine = solve_case(32, 1, 20.0, 1.0);
+        assert!(medium.l2_error < coarse.l2_error);
+        assert!(fine.l2_error < medium.l2_error);
+        assert!(convergence_rate(&coarse, &medium) > 1.9);
+        assert!(convergence_rate(&medium, &fine) > 1.9);
+        assert!(fine.l2_error < 1.2e-3, "fine-mesh L2 error too large: {}", fine.l2_error);
+    }
+
+    #[test]
+    fn ex9_dg_solution_scales_linearly_with_source() {
+        let unit = solve_case(16, 1, 20.0, 1.0);
+        let doubled = solve_case(16, 1, 20.0, 2.0);
+        assert!(unit.converged && doubled.converged);
+        assert!((doubled.solution_norm / unit.solution_norm - 2.0).abs() < 1.0e-9,
+            "solution norm ratio mismatch: unit={} doubled={}", unit.solution_norm, doubled.solution_norm);
+        assert!((doubled.solution_checksum / unit.solution_checksum - 2.0).abs() < 1.0e-9,
+            "solution checksum ratio mismatch: unit={} doubled={}", unit.solution_checksum, doubled.solution_checksum);
+        assert!((doubled.l2_error / unit.l2_error - 2.0).abs() < 1.0e-9,
+            "L2 error ratio mismatch: unit={} doubled={}", unit.l2_error, doubled.l2_error);
+    }
+
+    #[test]
+    fn ex9_dg_sign_reversed_source_flips_solution() {
+        let positive = solve_case(16, 1, 20.0, 1.0);
+        let negative = solve_case(16, 1, 20.0, -1.0);
+        assert!(positive.converged && negative.converged);
+        assert!((positive.solution_norm - negative.solution_norm).abs() < 1.0e-12);
+        assert!((positive.solution_checksum + negative.solution_checksum).abs() < 1.0e-10,
+            "solution checksum should flip sign: positive={} negative={}",
+            positive.solution_checksum,
+            negative.solution_checksum);
+        assert!((positive.l2_error - negative.l2_error).abs() < 1.0e-12);
+    }
 }
 

@@ -501,5 +501,77 @@ mod tests {
         assert!(result.min_u > 0.75, "min_u = {}", result.min_u);
         assert!(result.max_u < 1.15, "max_u = {}", result.max_u);
     }
+
+    #[test]
+    fn ex38_finer_cut_cell_subdivision_improves_area_accuracy() {
+        let coarse = solve_embedded_problem(&Args {
+            n: 16,
+            radius: 0.30,
+            cx: 0.5,
+            cy: 0.5,
+            alpha: 20.0,
+            subdiv: 4,
+            nitsche_gamma: 20.0,
+        });
+        let fine = solve_embedded_problem(&Args {
+            n: 16,
+            radius: 0.30,
+            cx: 0.5,
+            cy: 0.5,
+            alpha: 20.0,
+            subdiv: 8,
+            nitsche_gamma: 20.0,
+        });
+
+        assert!(
+            fine.area_rel_error < coarse.area_rel_error,
+            "expected finer cut-cell subdivision to improve area accuracy: coarse={} fine={}",
+            coarse.area_rel_error,
+            fine.area_rel_error
+        );
+        assert!(fine.area_rel_error < 1.0e-3, "fine subdivision area error too large: {}", fine.area_rel_error);
+    }
+
+    #[test]
+    fn ex38_nitsche_gamma_variation_preserves_constant_solution() {
+        let weak = solve_embedded_problem(&Args {
+            n: 16,
+            radius: 0.30,
+            cx: 0.5,
+            cy: 0.5,
+            alpha: 20.0,
+            subdiv: 8,
+            nitsche_gamma: 10.0,
+        });
+        let strong = solve_embedded_problem(&Args {
+            n: 16,
+            radius: 0.30,
+            cx: 0.5,
+            cy: 0.5,
+            alpha: 20.0,
+            subdiv: 8,
+            nitsche_gamma: 40.0,
+        });
+
+        for (label, result) in [("weak", &weak), ("strong", &strong)] {
+            assert!(result.l2_error < 1.0e-12, "{label} gamma embedded L2 error = {}", result.l2_error);
+            assert!(result.boundary_l2_error < 1.0e-12, "{label} gamma boundary L2 error = {}", result.boundary_l2_error);
+            assert!((result.min_u - 1.0).abs() < 1.0e-12, "{label} gamma min_u = {}", result.min_u);
+            assert!((result.max_u - 1.0).abs() < 1.0e-12, "{label} gamma max_u = {}", result.max_u);
+        }
+
+        assert!(
+            (weak.area_rel_error - strong.area_rel_error).abs() < 1.0e-12,
+            "area estimate should be gamma-independent for fixed geometry: weak={} strong={}",
+            weak.area_rel_error,
+            strong.area_rel_error
+        );
+        assert!(
+            (weak.interface_length - strong.interface_length).abs() < 1.0e-12,
+            "interface length should be gamma-independent for fixed geometry: weak={} strong={}",
+            weak.interface_length,
+            strong.interface_length
+        );
+    }
 }
 

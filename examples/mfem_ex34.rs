@@ -42,6 +42,7 @@ fn main() {
     );
     println!("  h = {:.4e},  L² error = {:.4e}", result.h, result.l2_error);
     println!("  ||u||₂ = {:.4e}", result.solution_l2);
+    println!("  checksum = {:.8e}", result.solution_checksum);
 }
 
 struct CaseResult {
@@ -52,6 +53,7 @@ struct CaseResult {
     h: f64,
     l2_error: f64,
     solution_l2: f64,
+    solution_checksum: f64,
 }
 
 fn solve_case(args: &Args) -> CaseResult {
@@ -105,6 +107,11 @@ fn solve_case_with_scale_and_field(args: &Args, scale: f64) -> (CaseResult, Vec<
     let n_dofs = problem.n_dofs();
     let solved = problem.solve();
     let solution_l2 = solved.solution.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let solution_checksum = solved.solution
+        .iter()
+        .enumerate()
+        .map(|(i, value)| (i as f64 + 1.0) * value)
+        .sum::<f64>();
     let l2_error = l2_error_hcurl_exact(&solved.space, &solved.solution, |x| exact_field(x, scale));
 
     (
@@ -116,6 +123,7 @@ fn solve_case_with_scale_and_field(args: &Args, scale: f64) -> (CaseResult, Vec<
             h: 1.0 / args.n as f64,
             l2_error,
             solution_l2,
+            solution_checksum,
         },
         solved.solution,
     )
@@ -346,6 +354,7 @@ mod tests {
 
         let solution_ratio = full.solution_l2 / half.solution_l2.max(1.0e-30);
         let error_ratio = full.l2_error / half.l2_error.max(1.0e-30);
+        let checksum_ratio = full.solution_checksum / half.solution_checksum.max(1.0e-30);
 
         assert!(
             (solution_ratio - 2.0).abs() < 1.0e-6,
@@ -356,6 +365,11 @@ mod tests {
             (error_ratio - 2.0).abs() < 1.0e-6,
             "expected absorbing discretization error to scale linearly, got ratio {}",
             error_ratio
+        );
+        assert!(
+            (checksum_ratio - 2.0).abs() < 1.0e-6,
+            "expected absorbing checksum to scale linearly, got ratio {}",
+            checksum_ratio
         );
     }
 
@@ -391,5 +405,28 @@ mod tests {
             "expected absorbing Maxwell solution norm to remain invariant under sign reversal, got relative gap {}",
             norm_rel_gap
         );
+        assert!((positive.solution_checksum + negative.solution_checksum).abs() < 1.0e-10,
+            "checksum should flip sign: positive={} negative={}",
+            positive.solution_checksum,
+            negative.solution_checksum);
+    }
+
+    #[test]
+    fn absorbing_maxwell_zero_source_gives_trivial_solution() {
+        let result = solve_case_with_scale(
+            &Args {
+                n: 8,
+                anisotropic: false,
+                gamma_x: 1.0,
+                gamma_y: 1.5,
+            },
+            0.0,
+        );
+
+        assert!(result.converged);
+        assert!(result.solution_l2 < 1.0e-14, "expected zero solution norm, got {}", result.solution_l2);
+        assert!(result.solution_checksum.abs() < 1.0e-14,
+            "expected zero checksum, got {}", result.solution_checksum);
+        assert!(result.l2_error < 1.0e-14, "expected zero manufactured-solution error, got {}", result.l2_error);
     }
 }

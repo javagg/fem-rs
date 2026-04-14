@@ -27,14 +27,12 @@
 //! cargo run --example mfem_ex7_neumann_mixed_bc -- --n 8 --n 16 --n 32  # convergence
 //! ```
 
-use std::f64::consts::PI;
-
 use fem_assembly::{
     assembler::face_dofs_p1,
     standard::{DiffusionIntegrator, DomainSourceIntegrator, NeumannIntegrator},
     Assembler,
 };
-use fem_mesh::{topology::MeshTopology, SimplexMesh};
+use fem_mesh::SimplexMesh;
 use fem_solver::{solve_pcg_jacobi, SolverConfig};
 use fem_space::{
     constraints::{apply_dirichlet, boundary_dofs},
@@ -42,9 +40,9 @@ use fem_space::{
     H1Space,
 };
 
-// Exact solution: u(x,y) = x(1-x) * y(1-y)
-fn u_exact(x: &[f64]) -> f64 {
-    x[0] * (1.0 - x[0]) * x[1] * (1.0 - x[1])
+// Exact solution: u(x,y) = scale * x(1-x) * y(1-y)
+fn u_exact_scaled(x: &[f64], scale: f64) -> f64 {
+    scale * x[0] * (1.0 - x[0]) * x[1] * (1.0 - x[1])
 }
 
 // Source term: f = -Δu  for u = x(1-x)y(1-y)
@@ -52,8 +50,19 @@ fn u_exact(x: &[f64]) -> f64 {
 //      = (-2)(y(1-y)) + (-2)(x(1-x))
 //      = -2 [x(1-x) + y(1-y)]
 // So f = -Δu = 2 [x(1-x) + y(1-y)]
-fn f_rhs(x: &[f64]) -> f64 {
-    2.0 * (x[0] * (1.0 - x[0]) + x[1] * (1.0 - x[1]))
+fn f_rhs_scaled(x: &[f64], kappa: f64, scale: f64) -> f64 {
+    2.0 * kappa * scale * (x[0] * (1.0 - x[0]) + x[1] * (1.0 - x[1]))
+}
+
+struct SolveResult {
+    n: usize,
+    n_nodes: usize,
+    n_dofs: usize,
+    kappa: f64,
+    solution_scale: f64,
+    l2_error: f64,
+    solution_norm: f64,
+    solution_checksum: f64,
 }
 
 fn main() {
@@ -73,19 +82,28 @@ fn main() {
     let mut prev_h = None::<f64>;
 
     for &n in &args.n_list {
-        let (l2, n_nodes, n_dofs) = solve_one(n, args.kappa);
+        let result = solve_case(n, args.kappa, 1.0);
         let h = 1.0 / n as f64;
 
         let rate = match (prev_err, prev_h) {
-            (Some(e0), Some(h0)) => format!("{:.2}", (l2 / e0).ln() / (h / h0).ln()),
+            (Some(e0), Some(h0)) => format!("{:.2}", (result.l2_error / e0).ln() / (h / h0).ln()),
             _ => "  --".to_string(),
         };
 
         println!(
             "  {:>3}  {:>8}  {:>8}  {:>12.4e}  {:>8}",
-            n, n_nodes, n_dofs, l2, rate
+            result.n, result.n_nodes, result.n_dofs, result.l2_error, rate
         );
-        prev_err = Some(l2);
+        if args.n_list.len() == 1 {
+            println!(
+                "       kappa = {:.3}, scale = {:.3}, ||u_h||_L2 = {:.4e}, checksum = {:.8e}",
+                result.kappa,
+                result.solution_scale,
+                result.solution_norm,
+                result.solution_checksum
+            );
+        }
+        prev_err = Some(result.l2_error);
         prev_h = Some(h);
     }
 
@@ -93,7 +111,7 @@ fn main() {
     println!("Done.");
 }
 
-fn solve_one(n: usize, kappa: f64) -> (f64, usize, usize) {
+fn solve_case(n: usize, kappa: f64, solution_scale: f64) -> SolveResult {
     // ─── 1. Mesh and space ────────────────────────────────────────────────────
     let mesh = SimplexMesh::<2>::unit_square_tri(n);
     let space = H1Space::new(mesh, 1);
@@ -103,7 +121,7 @@ fn solve_one(n: usize, kappa: f64) -> (f64, usize, usize) {
     let mut mat = Assembler::assemble_bilinear(&space, &[&DiffusionIntegrator { kappa }], 3);
 
     // ─── 3. Assemble volume RHS f v dx ─────────────────────────────────────
-    let src = DomainSourceIntegrator::new(f_rhs);
+    let src = DomainSourceIntegrator::new(|x: &[f64]| f_rhs_scaled(x, kappa, solution_scale));
     let mut rhs = Assembler::assemble_linear(&space, &[&src], 3);
 
     // ─── 4. Assemble Neumann boundary term ∫_{Γ_N} g(x) v ds ────────────────
@@ -118,7 +136,7 @@ fn solve_one(n: usize, kappa: f64) -> (f64, usize, usize) {
     //   The Neumann integrator computes g(x,n) v ds where g receives
     //   the physical coords x and the outward normal n at each face QP.
 
-    let neumann_g = NeumannIntegrator::new(|x: &[f64], _n: &[f64]| {
+    let neumann_g = NeumannIntegrator::new(|x: &[f64], n: &[f64]| {
         // κ * ∂u/∂n at (x,y):
         //   On right (x): κ*(1-2x)*y*(1-y) the assembler calls this only for tagged faces
         //   On top   (y): κ*(1-2y)*x*(1-x)
@@ -126,9 +144,9 @@ fn solve_one(n: usize, kappa: f64) -> (f64, usize, usize) {
         //   axis-aligned and we know the normal from context, we can compute it
         //   directly. For generality we use the full gradient dotted with the
         //   actual normal passed by the integrator:
-        let du_dx = (1.0 - 2.0 * x[0]) * x[1] * (1.0 - x[1]);
-        let du_dy = x[0] * (1.0 - x[0]) * (1.0 - 2.0 * x[1]);
-        kappa * (du_dx * _n[0] + du_dy * _n[1])
+        let du_dx = solution_scale * (1.0 - 2.0 * x[0]) * x[1] * (1.0 - x[1]);
+        let du_dy = solution_scale * x[0] * (1.0 - x[0]) * (1.0 - 2.0 * x[1]);
+        kappa * (du_dx * n[0] + du_dy * n[1])
     });
 
     let face_dofs = face_dofs_p1(space.mesh());
@@ -162,9 +180,24 @@ fn solve_one(n: usize, kappa: f64) -> (f64, usize, usize) {
     solve_pcg_jacobi(&mat, &rhs, &mut u, &cfg).expect("solver failed");
 
     // ─── 7. L² error ──────────────────────────────────────────────────────────
-    let l2 = l2_error(&space, &u, u_exact);
+    let l2 = l2_error(&space, &u, |x| u_exact_scaled(x, solution_scale));
+    let solution_norm = u.iter().map(|value| value * value).sum::<f64>().sqrt();
+    let solution_checksum = u
+        .iter()
+        .enumerate()
+        .map(|(i, value)| (i as f64 + 1.0) * value)
+        .sum::<f64>();
 
-    (l2, space.mesh().n_nodes(), ndofs)
+    SolveResult {
+        n,
+        n_nodes: space.mesh().n_nodes(),
+        n_dofs: ndofs,
+        kappa,
+        solution_scale,
+        l2_error: l2,
+        solution_norm,
+        solution_checksum,
+    }
 }
 
 // ─── L² error helper ─────────────────────────────────────────────────────────
@@ -233,5 +266,60 @@ fn parse_args() -> Args {
         a.n_list = vec![8, 16, 32];
     }
     a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn convergence_rate(coarse: &SolveResult, fine: &SolveResult) -> f64 {
+        let h_coarse = 1.0 / coarse.n as f64;
+        let h_fine = 1.0 / fine.n as f64;
+        (fine.l2_error / coarse.l2_error).ln() / (h_fine / h_coarse).ln()
+    }
+
+    #[test]
+    fn ex7_mixed_bc_coarse_mesh_has_reasonable_error() {
+        let result = solve_case(8, 1.0, 1.0);
+        assert_eq!(result.n_nodes, 81);
+        assert_eq!(result.n_dofs, 81);
+        assert!((result.kappa - 1.0).abs() < 1.0e-12);
+        assert!((result.solution_scale - 1.0).abs() < 1.0e-12);
+        assert!(result.l2_error < 1.5e-3, "coarse-mesh L2 error too large: {}", result.l2_error);
+    }
+
+    #[test]
+    fn ex7_mixed_bc_refinement_recovers_second_order_convergence() {
+        let coarse = solve_case(8, 1.0, 1.0);
+        let medium = solve_case(16, 1.0, 1.0);
+        let fine = solve_case(32, 1.0, 1.0);
+        assert!(medium.l2_error < coarse.l2_error);
+        assert!(fine.l2_error < medium.l2_error);
+        assert!(convergence_rate(&coarse, &medium) > 1.9);
+        assert!(convergence_rate(&medium, &fine) > 1.95);
+        assert!(fine.l2_error < 1.0e-4, "fine-mesh L2 error too large: {}", fine.l2_error);
+    }
+
+    #[test]
+    fn ex7_mixed_bc_manufactured_solution_remains_consistent_across_kappa() {
+        let kappa1 = solve_case(16, 1.0, 1.0);
+        let kappa2 = solve_case(16, 2.0, 1.0);
+        assert!(kappa1.l2_error < 5.0e-4);
+        assert!(kappa2.l2_error < 5.0e-4);
+        let rel = (kappa2.l2_error - kappa1.l2_error).abs() / kappa1.l2_error.max(1.0e-14);
+        assert!(rel < 0.05, "kappa sensitivity too large: k1={} k2={}", kappa1.l2_error, kappa2.l2_error);
+    }
+
+    #[test]
+    fn ex7_mixed_bc_sign_reversed_solution_flips_discrete_state() {
+        let positive = solve_case(16, 1.0, 1.0);
+        let negative = solve_case(16, 1.0, -1.0);
+        assert!((positive.solution_norm - negative.solution_norm).abs() < 1.0e-12);
+        assert!((positive.solution_checksum + negative.solution_checksum).abs() < 1.0e-10,
+            "solution checksum should flip sign: positive={} negative={}",
+            positive.solution_checksum,
+            negative.solution_checksum);
+        assert!((positive.l2_error - negative.l2_error).abs() < 1.0e-12);
+    }
 }
 

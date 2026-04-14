@@ -365,4 +365,54 @@ mod tests {
         assert!(result.unconstrained_min_gap < -1e-3, "unconstrained solution should violate obstacle: {}", result.unconstrained_min_gap);
         assert!(result.min_gap >= -1e-8, "projected solution should be feasible: {}", result.min_gap);
     }
+
+    #[test]
+    fn ex36_stronger_downward_loads_expand_contact_set() {
+        let light = solve_obstacle_problem(14, -2.0);
+        let medium = solve_obstacle_problem(14, -5.0);
+        let strong = solve_obstacle_problem(14, -8.0);
+
+        for (label, result) in [("light", &light), ("medium", &medium), ("strong", &strong)] {
+            assert!(result.min_gap >= -1e-8, "{label} load violated obstacle: {}", result.min_gap);
+            assert!(result.min_multiplier >= -1e-6, "{label} load had negative multiplier: {}", result.min_multiplier);
+            assert!(result.complementarity < 1e-6, "{label} load complementarity too large: {}", result.complementarity);
+        }
+
+        assert!(
+            light.contact_dofs < medium.contact_dofs && medium.contact_dofs < strong.contact_dofs,
+            "expected stronger downward load to enlarge contact set, got light={} medium={} strong={}",
+            light.contact_dofs,
+            medium.contact_dofs,
+            strong.contact_dofs
+        );
+        assert!(
+            light.obstacle_l2_distance > medium.obstacle_l2_distance
+                && medium.obstacle_l2_distance > strong.obstacle_l2_distance,
+            "expected stronger downward load to move solution closer to obstacle, got light={} medium={} strong={}",
+            light.obstacle_l2_distance,
+            medium.obstacle_l2_distance,
+            strong.obstacle_l2_distance
+        );
+    }
+
+    #[test]
+    fn ex36_upward_load_has_smaller_contact_than_downward_load() {
+        let upward = solve_obstacle_problem(14, 1.0);
+        let downward = solve_obstacle_problem(14, -5.0);
+
+        assert!(upward.min_gap >= -1e-8, "upward load violated obstacle: {}", upward.min_gap);
+        assert!(upward.complementarity < 1e-6, "upward load complementarity too large: {}", upward.complementarity);
+        assert!(
+            upward.contact_dofs < downward.contact_dofs,
+            "expected upward load to reduce contact set, got upward={} downward={}",
+            upward.contact_dofs,
+            downward.contact_dofs
+        );
+        assert!(
+            upward.obstacle_l2_distance > downward.obstacle_l2_distance,
+            "expected upward load solution to sit farther from obstacle, got upward={} downward={}",
+            upward.obstacle_l2_distance,
+            downward.obstacle_l2_distance
+        );
+    }
 }

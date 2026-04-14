@@ -29,7 +29,7 @@
 //! ```
 
 use std::f64::consts::PI;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use fem_assembly::standard::{DiffusionIntegrator, MassIntegrator};
 use fem_mesh::SimplexMesh;
@@ -45,21 +45,65 @@ use fem_space::{constraints::boundary_dofs, fe_space::FESpace, H1Space};
 fn main() {
     env_logger::init();
 
-    let args: Vec<String> = std::env::args().collect();
-    let n_workers = parse_arg(&args, "--ranks").unwrap_or(2);
-    let mesh_n = parse_arg(&args, "--n").unwrap_or(16);
-    let use_p2 = args.iter().any(|a| a == "--p2");
-    let dt = parse_f64(&args, "--dt").unwrap_or(0.01);
-    let t_end = parse_f64(&args, "--T").unwrap_or(0.1);
-    let kappa = parse_f64(&args, "--kappa").unwrap_or(1.0);
-    let order: u8 = if use_p2 { 2 } else { 1 };
+    let args = parse_args();
 
     println!("=== fem-rs mfem_pex4: Parallel implicit heat equation ===");
-    println!("  Workers: {n_workers}, Mesh: {mesh_n}×{mesh_n}, P{order}");
+    println!("  Workers: {}, Mesh: {}x{}, P{}", args.n_workers, args.mesh_n, args.mesh_n, args.order);
     println!(
-        "  κ = {kappa}, dt = {dt}, T = {t_end}, steps = {}",
-        (t_end / dt).ceil() as usize
+        "  kappa = {}, dt = {}, T = {}, steps = {}",
+        args.kappa,
+        args.dt,
+        args.t_end,
+        (args.t_end / args.dt).ceil() as usize
     );
+
+    let result = run_case(
+        args.mesh_n,
+        args.n_workers,
+        args.order,
+        args.dt,
+        args.t_end,
+        args.kappa,
+        1.0,
+    );
+
+    println!("  Global DOFs: {}", result.global_dofs);
+    println!("  t = {:.4e}, nodal RMS error vs exact = {:.4e}", result.final_time, result.rms_err);
+    println!("  ||u(T)||_L2 = {:.4e}", result.solution_norm);
+    println!("  checksum = {:.8e}", result.solution_checksum);
+    println!("  (exact decay factor = {:.6e})", result.decay);
+    println!("Done.");
+}
+
+struct Args {
+    n_workers: usize,
+    mesh_n: usize,
+    order: u8,
+    dt: f64,
+    t_end: f64,
+    kappa: f64,
+}
+
+struct RunResult {
+    global_dofs: usize,
+    final_time: f64,
+    rms_err: f64,
+    solution_norm: f64,
+    solution_checksum: f64,
+    decay: f64,
+}
+
+fn run_case(
+    mesh_n: usize,
+    n_workers: usize,
+    order: u8,
+    dt: f64,
+    t_end: f64,
+    kappa: f64,
+    initial_scale: f64,
+) -> RunResult {
+    let result = Arc::new(Mutex::new(None::<RunResult>));
+    let result_slot = Arc::clone(&result);
 
     let mesh = Arc::new(SimplexMesh::<2>::unit_square_tri(mesh_n));
 
@@ -72,12 +116,17 @@ fn main() {
         let local_mesh = par_mesh.local_mesh().clone();
 
         // 2. Build parallel FE space.
+        let dof_manager = if order > 1 {
+            Some(DofManager::new(&local_mesh, order))
+        } else {
+            None
+        };
         let space = H1Space::new(local_mesh, order);
-        let par_space = ParallelFESpace::new(space, &par_mesh, comm.clone());
-        let n_global = par_space.n_global_dofs();
-        if rank == 0 {
-            println!("  Global DOFs: {n_global}");
-        }
+        let par_space = if let Some(ref dm) = dof_manager {
+            ParallelFESpace::new_with_dof_manager(space, &par_mesh, dm, comm.clone())
+        } else {
+            ParallelFESpace::new(space, &par_mesh, comm.clone())
+        };
 
         let quad_order = order * 2 + 1;
         let dof_part = par_space.dof_partition();
@@ -123,7 +172,7 @@ fn main() {
                 // unpermute_dof maps partition-local owned index → dm-local DOF id
                 let dm_dof = dof_part.unpermute_dof(i as u32);
                 let x = dm.dof_coord(dm_dof);
-                data[i] = (PI * x[0]).sin() * (PI * x[1]).sin();
+                data[i] = initial_scale * (PI * x[0]).sin() * (PI * x[1]).sin();
             }
             // Zero boundary DOFs.
             for &d in &bnd {
@@ -180,32 +229,67 @@ fn main() {
         }
 
         // 8. Compare to exact solution at owned DOFs.
-        let decay = (-2.0 * PI * PI * kappa * t_end).exp();
+        let decay = (-2.0 * PI * PI * kappa * t).exp();
         let dm = par_space.local_space().dof_manager();
         let local_err2: f64 = (0..dof_part.n_owned_dofs)
             .map(|i| {
                 let dm_dof = dof_part.unpermute_dof(i as u32);
                 let x = dm.dof_coord(dm_dof);
-                let u_ex = decay * (PI * x[0]).sin() * (PI * x[1]).sin();
+                let u_ex = initial_scale * decay * (PI * x[0]).sin() * (PI * x[1]).sin();
                 (u.owned_slice()[i] - u_ex).powi(2)
             })
             .sum();
         let local_count = dof_part.n_owned_dofs as f64;
+        let local_checksum: f64 = u.owned_slice()
+            .iter()
+            .enumerate()
+            .map(|(i, value)| {
+                let gid = dof_part.global_dof(i as u32) as f64 + 1.0;
+                gid * value
+            })
+            .sum();
 
         // Global reduction.
         let total_err2 = comm.allreduce_sum_f64(local_err2);
         let total_n = comm.allreduce_sum_f64(local_count);
+        let solution_checksum = comm.allreduce_sum_f64(local_checksum);
+        let solution_norm = u.global_norm();
         let rms_err = (total_err2 / total_n).sqrt();
 
         if rank == 0 {
-            println!("  t = {t:.4e},  nodal RMS error vs exact = {rms_err:.4e}");
-            println!("  (exact decay factor = {decay:.6e})");
-            println!("Done.");
+            *result_slot.lock().expect("mfem_pex4 result mutex poisoned") = Some(RunResult {
+                global_dofs: par_space.n_global_dofs(),
+                final_time: t,
+                rms_err,
+                solution_norm,
+                solution_checksum,
+                decay,
+            });
         }
     });
+
+    let final_result = result
+        .lock()
+        .expect("mfem_pex4 result mutex poisoned after launch")
+        .take()
+        .expect("rank 0 did not publish mfem_pex4 result");
+    final_result
 }
 
 // ─── CLI ─────────────────────────────────────────────────────────────────────
+
+fn parse_args() -> Args {
+    let args: Vec<String> = std::env::args().collect();
+    let use_p2 = args.iter().any(|a| a == "--p2");
+    Args {
+        n_workers: parse_arg(&args, "--ranks").unwrap_or(2),
+        mesh_n: parse_arg(&args, "--n").unwrap_or(16),
+        order: if use_p2 { 2 } else { 1 },
+        dt: parse_f64(&args, "--dt").unwrap_or(0.01),
+        t_end: parse_f64(&args, "--T").unwrap_or(0.1),
+        kappa: parse_f64(&args, "--kappa").unwrap_or(1.0),
+    }
+}
 
 fn parse_arg(args: &[String], flag: &str) -> Option<usize> {
     args.windows(2)
@@ -217,4 +301,98 @@ fn parse_f64(args: &[String], flag: &str) -> Option<f64> {
     args.windows(2)
         .find(|w| w[0] == flag)
         .and_then(|w| w[1].parse().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pex4_parallel_heat_coarse_case_has_reasonable_error() {
+        let result = run_case(8, 2, 1, 0.01, 0.1, 1.0, 1.0);
+        assert_eq!(result.global_dofs, 81);
+        assert!((result.final_time - 0.1).abs() < 1.0e-12);
+        assert!(result.rms_err < 1.0e-2, "RMS error too large: {}", result.rms_err);
+        assert!(result.solution_norm > 1.0e-2, "solution norm too small: {}", result.solution_norm);
+    }
+
+    #[test]
+    fn pex4_parallel_heat_partition_is_invariant_across_one_two_and_four_ranks() {
+        let serial = run_case(8, 1, 1, 0.01, 0.1, 1.0, 1.0);
+        let parallel2 = run_case(8, 2, 1, 0.01, 0.1, 1.0, 1.0);
+        let parallel4 = run_case(8, 4, 1, 0.01, 0.1, 1.0, 1.0);
+        assert_eq!(serial.global_dofs, parallel2.global_dofs);
+        assert_eq!(serial.global_dofs, parallel4.global_dofs);
+        assert!((serial.rms_err - parallel2.rms_err).abs() < 1.0e-12,
+            "RMS mismatch: serial={} parallel2={}", serial.rms_err, parallel2.rms_err);
+        assert!((serial.rms_err - parallel4.rms_err).abs() < 1.0e-12,
+            "RMS mismatch: serial={} parallel4={}", serial.rms_err, parallel4.rms_err);
+        assert!((serial.solution_norm - parallel2.solution_norm).abs() < 1.0e-12,
+            "solution norm mismatch: serial={} parallel2={}", serial.solution_norm, parallel2.solution_norm);
+        assert!((serial.solution_norm - parallel4.solution_norm).abs() < 1.0e-12,
+            "solution norm mismatch: serial={} parallel4={}", serial.solution_norm, parallel4.solution_norm);
+        assert!((serial.solution_checksum - parallel2.solution_checksum).abs() < 1.0e-10,
+            "checksum mismatch: serial={} parallel2={}", serial.solution_checksum, parallel2.solution_checksum);
+        assert!((serial.solution_checksum - parallel4.solution_checksum).abs() < 1.0e-10,
+            "checksum mismatch: serial={} parallel4={}", serial.solution_checksum, parallel4.solution_checksum);
+    }
+
+    #[test]
+    fn pex4_parallel_heat_smaller_dt_improves_accuracy() {
+        let coarse_dt = run_case(8, 2, 1, 0.01, 0.1, 1.0, 1.0);
+        let fine_dt = run_case(8, 2, 1, 0.005, 0.1, 1.0, 1.0);
+        assert!(fine_dt.rms_err < coarse_dt.rms_err,
+            "expected smaller dt to reduce RMS error: coarse={} fine={}",
+            coarse_dt.rms_err, fine_dt.rms_err);
+    }
+
+    #[test]
+    fn pex4_parallel_heat_sign_reversed_initial_condition_flips_solution() {
+        let positive = run_case(8, 2, 1, 0.01, 0.1, 1.0, 1.0);
+        let negative = run_case(8, 2, 1, 0.01, 0.1, 1.0, -1.0);
+        assert!((positive.rms_err - negative.rms_err).abs() < 1.0e-12,
+            "RMS error should be sign-invariant: positive={} negative={}", positive.rms_err, negative.rms_err);
+        assert!((positive.solution_norm - negative.solution_norm).abs() < 1.0e-12,
+            "solution norm should be sign-invariant: positive={} negative={}", positive.solution_norm, negative.solution_norm);
+        assert!((positive.solution_checksum + negative.solution_checksum).abs() < 1.0e-10,
+            "checksum should flip sign: positive={} negative={}", positive.solution_checksum, negative.solution_checksum);
+    }
+
+    #[test]
+    fn pex4_parallel_heat_kappa_scan_matches_expected_decay_trend() {
+        let fast_decay = run_case(8, 2, 1, 0.01, 0.1, 1.0, 1.0);
+        let slow_decay = run_case(8, 2, 1, 0.01, 0.1, 0.5, 1.0);
+        assert!(slow_decay.decay > fast_decay.decay,
+            "smaller kappa should decay less: fast={} slow={}", fast_decay.decay, slow_decay.decay);
+        assert!(slow_decay.solution_norm > fast_decay.solution_norm,
+            "smaller kappa should retain a larger solution norm: fast={} slow={}",
+            fast_decay.solution_norm,
+            slow_decay.solution_norm);
+        assert!(slow_decay.rms_err < fast_decay.rms_err,
+            "smaller kappa should reduce the time-integration error for the same dt: fast={} slow={}",
+            fast_decay.rms_err,
+            slow_decay.rms_err);
+    }
+
+    #[test]
+    fn pex4_parallel_heat_p2_case_runs_with_expected_global_dofs() {
+        let result = run_case(8, 2, 2, 0.01, 0.1, 1.0, 1.0);
+        assert_eq!(result.global_dofs, 289);
+        assert!((result.final_time - 0.1).abs() < 1.0e-12);
+        assert!(result.rms_err < 1.5e-2, "P2 RMS error too large: {}", result.rms_err);
+        assert!(result.solution_norm > 1.0, "P2 solution norm too small: {}", result.solution_norm);
+    }
+
+    #[test]
+    fn pex4_parallel_heat_p2_partition_is_invariant_between_two_and_four_ranks() {
+        let two = run_case(8, 2, 2, 0.01, 0.1, 1.0, 1.0);
+        let four = run_case(8, 4, 2, 0.01, 0.1, 1.0, 1.0);
+        assert_eq!(two.global_dofs, four.global_dofs);
+        assert!((two.rms_err - four.rms_err).abs() < 1.0e-12,
+            "P2 RMS mismatch: two={} four={}", two.rms_err, four.rms_err);
+        assert!((two.solution_norm - four.solution_norm).abs() < 1.0e-12,
+            "P2 solution norm mismatch: two={} four={}", two.solution_norm, four.solution_norm);
+        assert!((two.solution_checksum - four.solution_checksum).abs() < 1.0e-10,
+            "P2 checksum mismatch: two={} four={}", two.solution_checksum, four.solution_checksum);
+    }
 }

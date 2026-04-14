@@ -6,51 +6,110 @@
 //! - explicit SSP-RK2 time stepping with CFL control
 //! - periodic domain advection/acoustics smoke run
 
+use std::f64::consts::PI;
+
 use fem_assembly::{HyperbolicFormIntegrator, NumericalFlux};
+
+struct RunResult {
+    n: usize,
+    tf: f64,
+    cfl: f64,
+    gamma: f64,
+    rho_amplitude: f64,
+    flux: NumericalFlux,
+    steps: usize,
+    final_time: f64,
+    rho_min: f64,
+    rho_max: f64,
+    p_min: f64,
+    mass_drift: f64,
+    rho_l2_error: f64,
+    velocity_l2_error: f64,
+    pressure_l2_error: f64,
+    density_checksum: f64,
+    momentum_checksum: f64,
+}
 
 fn main() {
     let args = parse_args();
     println!("=== mfem_ex18_euler (baseline) ===");
     println!(
-        "  n={}, tf={:.3}, cfl={:.3}, flux={}",
+        "  n={}, tf={:.3}, cfl={:.3}, flux={}, amp={:.3}",
         args.n,
         args.tf,
         args.cfl,
-        match args.flux {
-            NumericalFlux::LaxFriedrichs => "lax",
-            NumericalFlux::Roe => "roe",
-        }
+        flux_name(args.flux),
+        args.rho_amplitude,
     );
 
-    let integ = HyperbolicFormIntegrator {
-        gamma: args.gamma,
-        flux: args.flux,
-    };
+    let result = run_case(args.n, args.tf, args.cfl, args.gamma, args.flux, args.rho_amplitude);
 
-    let n = args.n.max(8);
+    println!(
+        "  confirmed n={}, tf={:.3}, cfl={:.3}, gamma={:.3}, flux={}, amp={:.3}",
+        result.n,
+        result.tf,
+        result.cfl,
+        result.gamma,
+        flux_name(result.flux),
+        result.rho_amplitude,
+    );
+    println!("  steps={}, t_final={:.4}", result.steps, result.final_time);
+    println!(
+        "  rho range: [{:.4}, {:.4}], p_min={:.4}, mass drift={:.3e}",
+        result.rho_min, result.rho_max, result.p_min, result.mass_drift
+    );
+    println!(
+        "  errors: rho={:.4e}, u={:.4e}, p={:.4e}",
+        result.rho_l2_error, result.velocity_l2_error, result.pressure_l2_error
+    );
+    println!(
+        "  checksum(rho) = {:.8e}, checksum(rho*u) = {:.8e}",
+        result.density_checksum, result.momentum_checksum
+    );
+
+    assert!(result.rho_min > 0.0, "density became non-positive");
+    assert!(result.p_min > 0.0, "pressure became non-positive");
+    assert!(result.mass_drift < 5e-8, "mass conservation drift too large");
+
+    println!("  PASS");
+}
+
+fn run_case(
+    n: usize,
+    tf: f64,
+    cfl: f64,
+    gamma: f64,
+    flux: NumericalFlux,
+    rho_amplitude: f64,
+) -> RunResult {
+    let integ = HyperbolicFormIntegrator { gamma, flux };
+
+    let n = n.max(8);
     let dx = 1.0 / n as f64;
     let mut q = vec![[0.0; 3]; n];
+    let base_velocity = 1.0;
+    let base_pressure = 1.0;
 
     // Smooth periodic perturbation around a uniform moving state.
     for (i, qi) in q.iter_mut().enumerate() {
         let x = (i as f64 + 0.5) * dx;
-        let rho = 1.0 + 0.2 * (2.0 * std::f64::consts::PI * x).sin();
-        *qi = integ.prim_to_cons(rho, 1.0, 1.0);
+        let rho = exact_density(x, 0.0, rho_amplitude, base_velocity);
+        *qi = integ.prim_to_cons(rho, base_velocity, base_pressure);
     }
 
     let mass0: f64 = q.iter().map(|qi| qi[0]).sum::<f64>() * dx;
     let mut t = 0.0;
     let mut steps = 0usize;
 
-    while t < args.tf {
+    while t < tf {
         let smax = q
             .iter()
             .map(|qi| integ.max_wave_speed_1d(qi))
             .fold(0.0_f64, f64::max)
             .max(1e-12);
-        let mut dt = args.cfl * dx / smax;
-        if t + dt > args.tf {
-            dt = args.tf - t;
+        let mut dt = cfl * dx / smax;
+        if t + dt > tf {
+            dt = tf - t;
         }
         integ.step_ssprk2_periodic(&mut q, dx, dt);
         t += dt;
@@ -60,26 +119,60 @@ fn main() {
     let mut rho_min = f64::INFINITY;
     let mut p_min = f64::INFINITY;
     let mut rho_max = f64::NEG_INFINITY;
+    let mut rho_l2_error_sq = 0.0_f64;
+    let mut velocity_l2_error_sq = 0.0_f64;
+    let mut pressure_l2_error_sq = 0.0_f64;
+    let mut density_checksum = 0.0_f64;
+    let mut momentum_checksum = 0.0_f64;
     for qi in &q {
         let (rho, _u, p) = integ.cons_to_prim(qi);
         rho_min = rho_min.min(rho);
         rho_max = rho_max.max(rho);
         p_min = p_min.min(p);
     }
+    for (i, qi) in q.iter().enumerate() {
+        let x = (i as f64 + 0.5) * dx;
+        let (rho, u, p) = integ.cons_to_prim(qi);
+        let rho_exact = exact_density(x, t, rho_amplitude, base_velocity);
+        rho_l2_error_sq += (rho - rho_exact).powi(2);
+        velocity_l2_error_sq += (u - base_velocity).powi(2);
+        pressure_l2_error_sq += (p - base_pressure).powi(2);
+        density_checksum += (i as f64 + 1.0) * rho;
+        momentum_checksum += (i as f64 + 1.0) * qi[1];
+    }
     let mass1: f64 = q.iter().map(|qi| qi[0]).sum::<f64>() * dx;
     let mass_drift = (mass1 - mass0).abs();
 
-    println!("  steps={}, t_final={:.4}", steps, t);
-    println!(
-        "  rho range: [{:.4}, {:.4}], p_min={:.4}, mass drift={:.3e}",
-        rho_min, rho_max, p_min, mass_drift
-    );
+    RunResult {
+        n,
+        tf,
+        cfl,
+        gamma,
+        rho_amplitude,
+        flux,
+        steps,
+        final_time: t,
+        rho_min,
+        rho_max,
+        p_min,
+        mass_drift,
+        rho_l2_error: (rho_l2_error_sq / n as f64).sqrt(),
+        velocity_l2_error: (velocity_l2_error_sq / n as f64).sqrt(),
+        pressure_l2_error: (pressure_l2_error_sq / n as f64).sqrt(),
+        density_checksum,
+        momentum_checksum,
+    }
+}
 
-    assert!(rho_min > 0.0, "density became non-positive");
-    assert!(p_min > 0.0, "pressure became non-positive");
-    assert!(mass_drift < 5e-8, "mass conservation drift too large");
+fn exact_density(x: f64, t: f64, rho_amplitude: f64, velocity: f64) -> f64 {
+    1.0 + rho_amplitude * (2.0 * PI * (x - velocity * t)).sin()
+}
 
-    println!("  PASS");
+fn flux_name(flux: NumericalFlux) -> &'static str {
+    match flux {
+        NumericalFlux::LaxFriedrichs => "lax",
+        NumericalFlux::Roe => "roe",
+    }
 }
 
 struct Args {
@@ -88,6 +181,7 @@ struct Args {
     cfl: f64,
     gamma: f64,
     flux: NumericalFlux,
+    rho_amplitude: f64,
 }
 
 fn parse_args() -> Args {
@@ -97,6 +191,7 @@ fn parse_args() -> Args {
         cfl: 0.35,
         gamma: 1.4,
         flux: NumericalFlux::Roe,
+        rho_amplitude: 0.2,
     };
 
     let mut it = std::env::args().skip(1);
@@ -122,9 +217,69 @@ fn parse_args() -> Args {
                     NumericalFlux::Roe
                 };
             }
+            "--rho-amplitude" | "--amp" => {
+                out.rho_amplitude = it.next().unwrap_or_else(|| "0.2".into()).parse().unwrap_or(0.2);
+            }
             _ => {}
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ex18_euler_coarse_roe_case_is_positive_and_reasonably_accurate() {
+        let result = run_case(50, 0.2, 0.35, 1.4, NumericalFlux::Roe, 0.2);
+        assert_eq!(result.n, 50);
+        assert!(result.steps > 0);
+        assert!(result.rho_min > 0.75, "density floor too low: {}", result.rho_min);
+        assert!(result.p_min > 0.99, "pressure floor too low: {}", result.p_min);
+        assert!(result.mass_drift < 1.0e-12, "mass drift too large: {}", result.mass_drift);
+        assert!(result.rho_l2_error < 2.0e-2, "rho error too large: {}", result.rho_l2_error);
+        assert!(result.velocity_l2_error < 1.0e-12, "velocity should stay exact: {}", result.velocity_l2_error);
+        assert!(result.pressure_l2_error < 1.0e-12, "pressure should stay exact: {}", result.pressure_l2_error);
+    }
+
+    #[test]
+    fn ex18_euler_refinement_reduces_density_error() {
+        let coarse = run_case(50, 0.2, 0.35, 1.4, NumericalFlux::Roe, 0.2);
+        let fine = run_case(100, 0.2, 0.35, 1.4, NumericalFlux::Roe, 0.2);
+        assert!(fine.rho_l2_error < coarse.rho_l2_error,
+            "refinement should reduce density error: coarse={} fine={}",
+            coarse.rho_l2_error,
+            fine.rho_l2_error);
+        assert!(fine.rho_l2_error < coarse.rho_l2_error * 0.75,
+            "refinement gain too small: coarse={} fine={}",
+            coarse.rho_l2_error,
+            fine.rho_l2_error);
+    }
+
+    #[test]
+    fn ex18_euler_roe_is_less_diffusive_than_lax_for_smooth_advection() {
+        let roe = run_case(100, 0.2, 0.35, 1.4, NumericalFlux::Roe, 0.2);
+        let lax = run_case(100, 0.2, 0.35, 1.4, NumericalFlux::LaxFriedrichs, 0.2);
+        assert!(roe.rho_l2_error < lax.rho_l2_error,
+            "Roe should be less diffusive than Lax on this smooth case: roe={} lax={}",
+            roe.rho_l2_error,
+            lax.rho_l2_error);
+        let roe_span = roe.rho_max - roe.rho_min;
+        let lax_span = lax.rho_max - lax.rho_min;
+        assert!(roe_span > lax_span,
+            "Roe should preserve a larger density span: roe={} lax={}", roe_span, lax_span);
+    }
+
+    #[test]
+    fn ex18_euler_zero_perturbation_preserves_constant_state() {
+        let result = run_case(64, 0.2, 0.35, 1.4, NumericalFlux::Roe, 0.0);
+        assert!(result.mass_drift < 1.0e-12);
+        assert!(result.rho_l2_error < 1.0e-12, "rho error should vanish: {}", result.rho_l2_error);
+        assert!(result.velocity_l2_error < 1.0e-12, "velocity error should vanish: {}", result.velocity_l2_error);
+        assert!(result.pressure_l2_error < 1.0e-12, "pressure error should vanish: {}", result.pressure_l2_error);
+        assert!((result.rho_min - 1.0).abs() < 1.0e-12);
+        assert!((result.rho_max - 1.0).abs() < 1.0e-12);
+    }
 }
 

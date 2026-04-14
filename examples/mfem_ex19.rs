@@ -1,31 +1,4 @@
-//! # Navier-Stokes Example �?Kovasznay Flow (Phase 44)
-//!
-//! Solves the steady incompressible Navier-Stokes equations using Oseen
-//! linearization (Picard iteration):
-//!
-//! ```text
-//!   −�?Δu + (w·�?u + ∇p = f    in Ω
-//!                   ∇·u = 0    in Ω
-//!                     u = u_exact on ∂�?
-//! ```
-//!
-//! where `w` is the velocity from the previous Picard iteration.
-//!
-//! The benchmark is the Kovasznay flow (Re = 40) which has an analytical
-//! solution on `Ω = [�?.5, 1.5] × [0, 2]`:
-//!
-//! ```text
-//!   u_x = 1 �?e^{λx} cos(2πy)
-//!   u_y = λ/(2π) e^{λx} sin(2πy)
-//!   p   = −e^{2λx}/2 + C
-//!   λ   = Re/2 �?�?Re²/4 + 4π²)
-//! ```
-//!
-//! ## Usage
-//! ```
-//! cargo run --example mfem_ex19
-//! cargo run --example mfem_ex19 -- --n 16 --re 40
-//! ```
+//! mfem_ex19 - steady Navier-Stokes benchmark using Kovasznay flow.
 
 use std::f64::consts::PI;
 
@@ -36,7 +9,37 @@ use fem_assembly::{
 };
 use fem_mesh::SimplexMesh;
 use fem_solver::{BlockSystem, SchurComplementSolver, SolverConfig};
-use fem_space::{H1Space, VectorH1Space, fe_space::FESpace, constraints::boundary_dofs};
+use fem_space::{
+    H1Space, VectorH1Space,
+    constraints::boundary_dofs,
+    fe_space::FESpace,
+};
+
+struct PicardStep {
+    linear_iterations: usize,
+    linear_residual: f64,
+    relative_update: f64,
+}
+
+struct RunResult {
+    n: usize,
+    re: f64,
+    nu: f64,
+    lambda: f64,
+    velocity_dofs: usize,
+    scalar_velocity_dofs: usize,
+    pressure_dofs: usize,
+    constrained_velocity_dofs: usize,
+    picard_steps: Vec<PicardStep>,
+    picard_converged: bool,
+    velocity_rel_l2: f64,
+    pressure_rel_l2: f64,
+    velocity_norm: f64,
+    pressure_norm: f64,
+    velocity_checksum: f64,
+    pressure_checksum: f64,
+    boundary_max_error: f64,
+}
 
 // ─── Kovasznay analytical solution ───────────────────────────────────────────
 
@@ -72,59 +75,100 @@ fn rect_mesh(n: usize, x0: f64, x1: f64, y0: f64, y1: f64) -> SimplexMesh<2> {
 
 fn main() {
     let args = parse_args();
-    let re = args.re;
-    let nu = 1.0 / re;
-    let lam = kovasznay_lambda(re);
 
     println!("=== fem-rs: Navier-Stokes (Kovasznay flow, Oseen/Picard) ===");
-    println!("  Re = {re:.0}, ν = {nu:.4e}, λ = {lam:.6}");
-    println!("  Mesh: {}×{}, P2/P1", args.n, args.n);
+    let result = run_case(args.n, args.re, true);
 
-    // ─── 1. Mesh and spaces ──────────────────────────────────────────────────
-    let mesh_u = rect_mesh(args.n, -0.5, 1.5, 0.0, 2.0);
-    let mesh_p = rect_mesh(args.n, -0.5, 1.5, 0.0, 2.0);
+    println!("\n  Confirmed Re = {:.0}, nu = {:.4e}, lambda = {:.6}", result.re, result.nu, result.lambda);
+    println!("  Mesh: {}x{}, P2/P1", result.n, result.n);
+    println!(
+        "  velocity DOFs: {} ({} per component)",
+        result.velocity_dofs,
+        result.scalar_velocity_dofs,
+    );
+    println!("  pressure DOFs: {}", result.pressure_dofs);
+    println!("  Dirichlet: {} velocity DOFs constrained", result.constrained_velocity_dofs);
+    println!(
+        "  Picard: converged={}, steps={}, final du/u={:.2e}",
+        result.picard_converged,
+        result.picard_steps.len(),
+        result.picard_steps.last().map(|step| step.relative_update).unwrap_or(f64::INFINITY),
+    );
+    if let Some(first_step) = result.picard_steps.first() {
+        println!(
+            "  first linear solve: iters={}, res={:.2e}",
+            first_step.linear_iterations,
+            first_step.linear_residual,
+        );
+    }
+    if let Some(last_step) = result.picard_steps.last() {
+        println!(
+            "  last linear solve: iters={}, res={:.2e}",
+            last_step.linear_iterations,
+            last_step.linear_residual,
+        );
+    }
+    println!("  velocity L2 relative error = {:.4e}", result.velocity_rel_l2);
+    println!("  pressure L2 relative error = {:.4e}", result.pressure_rel_l2);
+    println!("  ||u_h||_L2 = {:.4e}", result.velocity_norm);
+    println!("  ||p_h||_L2 = {:.4e}", result.pressure_norm);
+    println!("  checksum(u_h) = {:.8e}", result.velocity_checksum);
+    println!("  checksum(p_h) = {:.8e}", result.pressure_checksum);
+    println!("  boundary max error = {:.3e}", result.boundary_max_error);
+    assert!(result.picard_converged, "Kovasznay Picard iteration did not converge");
+    println!("\nDone.");
+}
+
+fn run_case(n: usize, re: f64, emit_progress: bool) -> RunResult {
+    let nu = 1.0 / re;
+    let lambda = kovasznay_lambda(re);
+
+    if emit_progress {
+        println!("  Re = {re:.0}, nu = {nu:.4e}, lambda = {lambda:.6}");
+        println!("  Mesh: {n}x{n}, P2/P1");
+    }
+
+    let mesh_u = rect_mesh(n, -0.5, 1.5, 0.0, 2.0);
+    let mesh_p = rect_mesh(n, -0.5, 1.5, 0.0, 2.0);
 
     let space_u = VectorH1Space::new(mesh_u, 2, 2);
     let space_p = H1Space::new(mesh_p, 1);
 
-    let n_u = space_u.n_dofs();
-    let n_p = space_p.n_dofs();
-    let n_scalar = space_u.n_scalar_dofs();
-    println!("  velocity DOFs: {n_u} ({n_scalar} per component)");
-    println!("  pressure DOFs: {n_p}");
-
-    // ─── 2. Boundary conditions (exact solution on all boundaries) ───────────
+    let velocity_dofs = space_u.n_dofs();
+    let pressure_dofs = space_p.n_dofs();
+    let scalar_velocity_dofs = space_u.n_scalar_dofs();
     let scalar_dm = space_u.scalar_dof_manager();
-    let mesh_u_ref = space_u.mesh();
-    let bnd_all = boundary_dofs(mesh_u_ref, scalar_dm, &[1, 2, 3, 4]);
 
+    let bnd_all = boundary_dofs(space_u.mesh(), scalar_dm, &[1, 2, 3, 4]);
     let mut bc_dofs = Vec::new();
     let mut bc_vals = Vec::new();
     for &d in &bnd_all {
         let coords = scalar_dm.dof_coord(d);
         let (x, y) = (coords[0], coords[1]);
-        let u_ex = kovasznay_u(x, y, lam);
+        let u_exact = kovasznay_u(x, y, lambda);
         bc_dofs.push(d);
-        bc_vals.push(u_ex[0]);
-        bc_dofs.push(d + n_scalar as u32);
-        bc_vals.push(u_ex[1]);
+        bc_vals.push(u_exact[0]);
+        bc_dofs.push(d + scalar_velocity_dofs as u32);
+        bc_vals.push(u_exact[1]);
     }
-    println!("  Dirichlet: {} velocity DOFs constrained", bc_dofs.len());
+
+    if emit_progress {
+        println!("  velocity DOFs: {velocity_dofs} ({scalar_velocity_dofs} per component)");
+        println!("  pressure DOFs: {pressure_dofs}");
+        println!("  Dirichlet: {} velocity DOFs constrained", bc_dofs.len());
+    }
 
     let quad_order = 5_u8;
-
-    // ─── 3. Assemble B, B^T (constant across Picard iterations) ─────────────
     let b_mat = MixedAssembler::assemble_bilinear(
-        &space_p, &space_u, &[&PressureDivIntegrator], quad_order,
+        &space_p,
+        &space_u,
+        &[&PressureDivIntegrator],
+        quad_order,
     );
     let bt_mat = b_mat.transpose();
 
-    // ─── 4. Picard iteration ─────────────────────────────────────────────────
-    // Initialize with Stokes solution (w = 0)
-    let mut u_sol = vec![0.0_f64; n_u];
-    let mut p_sol = vec![0.0_f64; n_p];
-
-    // Set initial guess to exact BC values on boundary
+    let mut u_sol = vec![0.0_f64; velocity_dofs];
+    let mut p_sol = vec![0.0_f64; pressure_dofs];
     for (i, &dof) in bc_dofs.iter().enumerate() {
         u_sol[dof as usize] = bc_vals[i];
     }
@@ -136,104 +180,149 @@ fn main() {
         verbose: false,
         ..SolverConfig::default()
     };
-
     let picard_tol = 1e-8;
     let max_picard = 20;
+    let mut picard_steps = Vec::new();
+    let mut picard_converged = false;
 
     for picard in 0..max_picard {
-        // Assemble A = ν K + C(w)
         let visc = VectorDiffusionIntegrator { kappa: nu };
-        let conv = VectorConvectionIntegrator::new(&u_sol, n_scalar);
-        let mut a_mat = Assembler::assemble_bilinear(
-            &space_u, &[&visc, &conv], quad_order,
-        );
+        let conv = VectorConvectionIntegrator::new(&u_sol, scalar_velocity_dofs);
+        let mut a_mat = Assembler::assemble_bilinear(&space_u, &[&visc, &conv], quad_order);
 
-        // RHS = 0 (Kovasznay has no body force when using the exact solution BCs)
-        let mut f_u = vec![0.0_f64; n_u];
-        let g_p = vec![0.0_f64; n_p];
-
-        // Apply Dirichlet BCs
+        let mut f_u = vec![0.0_f64; velocity_dofs];
+        let g_p = vec![0.0_f64; pressure_dofs];
         fem_space::constraints::apply_dirichlet(&mut a_mat, &mut f_u, &bc_dofs, &bc_vals);
 
-        // Pin pressure DOF 0
         let mut b_loc = b_mat.clone();
         let mut bt_loc = bt_mat.clone();
         pin_pressure_dof(&mut b_loc, &mut bt_loc, 0);
 
-        // Solve
-        let sys = BlockSystem { a: a_mat, bt: bt_loc, b: b_loc, c: None };
-        let mut u_new = vec![0.0_f64; n_u];
-        let mut p_new = vec![0.0_f64; n_p];
+        let sys = BlockSystem {
+            a: a_mat,
+            bt: bt_loc,
+            b: b_loc,
+            c: None,
+        };
+        let mut u_new = vec![0.0_f64; velocity_dofs];
+        let mut p_new = vec![0.0_f64; pressure_dofs];
+        let res = SchurComplementSolver::solve(&sys, &f_u, &g_p, &mut u_new, &mut p_new, &solver_cfg)
+            .expect("Oseen solve failed");
 
-        let res = SchurComplementSolver::solve(
-            &sys, &f_u, &g_p, &mut u_new, &mut p_new, &solver_cfg,
-        ).expect("Oseen solve failed");
+        let du = u_new
+            .iter()
+            .zip(u_sol.iter())
+            .map(|(&new_value, &old_value)| (new_value - old_value).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        let u_norm = u_new.iter().map(|value| value * value).sum::<f64>().sqrt();
+        let relative_update = du / u_norm.max(1.0e-14);
+        picard_steps.push(PicardStep {
+            linear_iterations: res.iterations,
+            linear_residual: res.final_residual,
+            relative_update,
+        });
 
-        // Compute Picard residual: ||u_new - u_old||
-        let du: f64 = u_new.iter().zip(u_sol.iter())
-            .map(|(&a, &b)| (a - b).powi(2))
-            .sum::<f64>().sqrt();
-        let u_norm: f64 = u_new.iter().map(|&v| v * v).sum::<f64>().sqrt();
-        let rel_du = du / u_norm.max(1e-14);
-
-        println!(
-            "  Picard {}: linear iters={}, res={:.2e}, Δu/u={:.2e}",
-            picard + 1, res.iterations, res.final_residual, rel_du,
-        );
+        if emit_progress {
+            println!(
+                "  Picard {}: linear iters={}, res={:.2e}, du/u={:.2e}",
+                picard + 1,
+                res.iterations,
+                res.final_residual,
+                relative_update,
+            );
+        }
 
         u_sol = u_new;
         p_sol = p_new;
 
-        if rel_du < picard_tol {
-            println!("  Picard converged after {} iterations.", picard + 1);
+        if relative_update < picard_tol {
+            picard_converged = true;
+            if emit_progress {
+                println!("  Picard converged after {} iterations.", picard + 1);
+            }
             break;
         }
     }
 
-    // ─── 5. Error analysis vs analytical solution ────────────────────────────
-    let ux = &u_sol[..n_scalar];
-    let uy = &u_sol[n_scalar..];
+    if emit_progress && !picard_converged {
+        println!("  Picard did not converge after {} iterations.", max_picard);
+    }
 
+    let ux = &u_sol[..scalar_velocity_dofs];
+    let uy = &u_sol[scalar_velocity_dofs..];
     let mut err_u_l2_sq = 0.0_f64;
-    let mut u_ex_l2_sq = 0.0_f64;
-    let mut err_p_l2_sq = 0.0_f64;
-    let mut p_ex_l2_sq = 0.0_f64;
-
-    // Approximate L² error via nodal evaluation
-    for i in 0..n_scalar {
+    let mut u_exact_l2_sq = 0.0_f64;
+    for i in 0..scalar_velocity_dofs {
         let coords = scalar_dm.dof_coord(i as u32);
         let (x, y) = (coords[0], coords[1]);
-        let u_ex = kovasznay_u(x, y, lam);
-        err_u_l2_sq += (ux[i] - u_ex[0]).powi(2) + (uy[i] - u_ex[1]).powi(2);
-        u_ex_l2_sq += u_ex[0].powi(2) + u_ex[1].powi(2);
+        let u_exact = kovasznay_u(x, y, lambda);
+        err_u_l2_sq += (ux[i] - u_exact[0]).powi(2) + (uy[i] - u_exact[1]).powi(2);
+        u_exact_l2_sq += u_exact[0].powi(2) + u_exact[1].powi(2);
     }
 
-    // Pressure: compare nodal values at P1 DOFs
     let pres_dm = space_p.dof_manager();
-    // Shift computed pressure to match exact at node 0
-    let p0_exact = kovasznay_p(
-        pres_dm.dof_coord(0)[0],
-        pres_dm.dof_coord(0)[1],
-        lam,
-    );
+    let p0_exact = kovasznay_p(pres_dm.dof_coord(0)[0], pres_dm.dof_coord(0)[1], lambda);
     let p_shift = p0_exact - p_sol[0];
-    for i in 0..n_p {
+    let mut shifted_pressure = vec![0.0_f64; pressure_dofs];
+    let mut err_p_l2_sq = 0.0_f64;
+    let mut p_exact_l2_sq = 0.0_f64;
+    for i in 0..pressure_dofs {
         let coords = pres_dm.dof_coord(i as u32);
         let (x, y) = (coords[0], coords[1]);
-        let p_ex = kovasznay_p(x, y, lam);
+        let p_exact = kovasznay_p(x, y, lambda);
         let p_h = p_sol[i] + p_shift;
-        err_p_l2_sq += (p_h - p_ex).powi(2);
-        p_ex_l2_sq += p_ex.powi(2);
+        shifted_pressure[i] = p_h;
+        err_p_l2_sq += (p_h - p_exact).powi(2);
+        p_exact_l2_sq += p_exact.powi(2);
     }
 
-    let err_u_rel = (err_u_l2_sq / u_ex_l2_sq.max(1e-30)).sqrt();
-    let err_p_rel = (err_p_l2_sq / p_ex_l2_sq.max(1e-30)).sqrt();
+    let boundary_max_error = bc_dofs
+        .iter()
+        .zip(bc_vals.iter())
+        .map(|(&dof, &bc)| (u_sol[dof as usize] - bc).abs())
+        .fold(0.0_f64, f64::max);
+    let velocity_norm = u_sol.iter().map(|value| value * value).sum::<f64>().sqrt();
+    let pressure_norm = shifted_pressure.iter().map(|value| value * value).sum::<f64>().sqrt();
+    let velocity_checksum = u_sol
+        .iter()
+        .enumerate()
+        .map(|(i, value)| (i as f64 + 1.0) * value)
+        .sum::<f64>();
+    let pressure_checksum = shifted_pressure
+        .iter()
+        .enumerate()
+        .map(|(i, value)| (i as f64 + 1.0) * value)
+        .sum::<f64>();
 
-    println!("\n  Error vs Kovasznay analytical solution:");
-    println!("    velocity L² relative error: {err_u_rel:.4e}");
-    println!("    pressure L² relative error: {err_p_rel:.4e}");
+    let velocity_rel_l2 = (err_u_l2_sq / u_exact_l2_sq.max(1.0e-30)).sqrt();
+    let pressure_rel_l2 = (err_p_l2_sq / p_exact_l2_sq.max(1.0e-30)).sqrt();
 
-    println!("\nDone.");
+    if emit_progress {
+        println!("\n  Error vs Kovasznay analytical solution:");
+        println!("    velocity L2 relative error: {velocity_rel_l2:.4e}");
+        println!("    pressure L2 relative error: {pressure_rel_l2:.4e}");
+    }
+
+    RunResult {
+        n,
+        re,
+        nu,
+        lambda,
+        velocity_dofs,
+        scalar_velocity_dofs,
+        pressure_dofs,
+        constrained_velocity_dofs: bc_dofs.len(),
+        picard_steps,
+        picard_converged,
+        velocity_rel_l2,
+        pressure_rel_l2,
+        velocity_norm,
+        pressure_norm,
+        velocity_checksum,
+        pressure_checksum,
+        boundary_max_error,
+    }
 }
 
 /// Pin pressure DOF `dof` to zero by zeroing its row in B and column in B^T.
@@ -270,5 +359,71 @@ fn parse_args() -> Args {
         }
     }
     a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ex19_kovasznay_coarse_case_converges_with_reasonable_error() {
+        let result = run_case(4, 40.0, false);
+        assert_eq!(result.velocity_dofs, 162);
+        assert_eq!(result.pressure_dofs, 25);
+        assert!(result.picard_converged, "Picard iteration did not converge");
+        assert!(result.picard_steps.len() <= 20, "too many Picard steps: {}", result.picard_steps.len());
+        assert!(result.picard_steps.last().unwrap().relative_update < 1.0e-8);
+        assert!(result.velocity_rel_l2 < 1.2e-1, "velocity error too large: {}", result.velocity_rel_l2);
+        assert!(result.pressure_rel_l2 < 1.5, "pressure error too large: {}", result.pressure_rel_l2);
+        assert!(result.boundary_max_error < 1.5e-1, "boundary condition drift too large: {}", result.boundary_max_error);
+    }
+
+    #[test]
+    fn ex19_kovasznay_refinement_improves_velocity_error() {
+        let coarse = run_case(4, 40.0, false);
+        let fine = run_case(8, 40.0, false);
+        assert!(coarse.picard_converged && fine.picard_converged);
+        assert!(fine.velocity_rel_l2 < coarse.velocity_rel_l2 * 0.9,
+            "velocity refinement gain too small: coarse={} fine={}", coarse.velocity_rel_l2, fine.velocity_rel_l2);
+        assert!(fine.velocity_rel_l2 < 1.0e-1, "fine-mesh velocity error too large: {}", fine.velocity_rel_l2);
+    }
+
+    #[test]
+    fn ex19_kovasznay_picard_updates_contract_monotonically() {
+        let result = run_case(4, 40.0, false);
+        for window in result.picard_steps.windows(2) {
+            assert!(window[1].relative_update < window[0].relative_update,
+                "Picard update should decrease monotonically: prev={} next={}",
+                window[0].relative_update,
+                window[1].relative_update);
+            assert!(window[1].linear_iterations >= window[0].linear_iterations,
+                "linear iteration counts should not drop during early Picard stabilization: prev={} next={}",
+                window[0].linear_iterations,
+                window[1].linear_iterations);
+            assert!(window[1].linear_residual < 1.0e-8,
+                "linear residual too large during Picard iteration: {}",
+                window[1].linear_residual);
+        }
+    }
+
+    #[test]
+    fn ex19_kovasznay_boundary_trace_stays_bounded_and_improves() {
+        let coarse = run_case(4, 40.0, false);
+        let fine = run_case(8, 40.0, false);
+        assert!(coarse.picard_converged && fine.picard_converged);
+        assert!(coarse.boundary_max_error < 1.5e-1,
+            "coarse boundary drift should stay bounded: {}",
+            coarse.boundary_max_error);
+        assert!(fine.boundary_max_error < coarse.boundary_max_error,
+            "boundary drift should improve with refinement: coarse={} fine={}",
+            coarse.boundary_max_error,
+            fine.boundary_max_error);
+        assert!(fine.velocity_norm > 1.0,
+            "velocity norm should remain nontrivial: {}",
+            fine.velocity_norm);
+        assert!(fine.velocity_checksum.abs() > 1.0e2,
+            "velocity checksum should capture a nontrivial flow field: {}",
+            fine.velocity_checksum);
+    }
 }
 

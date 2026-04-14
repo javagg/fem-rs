@@ -390,5 +390,118 @@ mod tests {
             result.final_compliance
         );
     }
+
+    #[test]
+    fn ex37_topopt_remains_stable_across_projection_parameters() {
+        let cases = [
+            Args {
+                n: 10,
+                iters: 12,
+                volfrac: 0.40,
+                penal: 2.0,
+                rho_min: 1.0e-3,
+                rmin: 0.22,
+                beta: 1.5,
+                eta: 0.5,
+            },
+            Args {
+                n: 10,
+                iters: 12,
+                volfrac: 0.40,
+                penal: 3.0,
+                rho_min: 1.0e-3,
+                rmin: 0.22,
+                beta: 2.5,
+                eta: 0.5,
+            },
+            Args {
+                n: 10,
+                iters: 12,
+                volfrac: 0.40,
+                penal: 4.0,
+                rho_min: 1.0e-3,
+                rmin: 0.22,
+                beta: 4.0,
+                eta: 0.5,
+            },
+        ];
+
+        for args in cases {
+            let result = run_topology_optimization(&args);
+            assert!(
+                (result.design_volume_fraction - args.volfrac).abs() < 5.0e-3,
+                "design volume fraction drifted for penal={} beta={}: {}",
+                args.penal,
+                args.beta,
+                result.design_volume_fraction
+            );
+            assert!(
+                (result.physical_volume_fraction - args.volfrac).abs() < 2.0e-2,
+                "physical volume fraction drifted for penal={} beta={}: {}",
+                args.penal,
+                args.beta,
+                result.physical_volume_fraction
+            );
+            assert!(
+                result.final_compliance < result.initial_compliance,
+                "compliance did not decrease for penal={} beta={}: initial={} final={}",
+                args.penal,
+                args.beta,
+                result.initial_compliance,
+                result.final_compliance
+            );
+            assert!(
+                result.max_density > 0.95 && result.min_density < 5.0e-3,
+                "projection/filter combination failed to create high-contrast design for penal={} beta={}: [{}, {}]",
+                args.penal,
+                args.beta,
+                result.min_density,
+                result.max_density
+            );
+        }
+    }
+
+    #[test]
+    fn ex37_higher_volume_fraction_lowers_final_compliance() {
+        let lean = run_topology_optimization(&Args {
+            n: 10,
+            iters: 12,
+            volfrac: 0.40,
+            penal: 3.0,
+            rho_min: 1.0e-3,
+            rmin: 0.22,
+            beta: 2.5,
+            eta: 0.5,
+        });
+        let rich = run_topology_optimization(&Args {
+            n: 10,
+            iters: 12,
+            volfrac: 0.55,
+            penal: 3.0,
+            rho_min: 1.0e-3,
+            rmin: 0.22,
+            beta: 2.5,
+            eta: 0.5,
+        });
+
+        assert!(
+            rich.final_compliance < lean.final_compliance,
+            "expected higher volume fraction to reduce final compliance, got lean={} rich={}",
+            lean.final_compliance,
+            rich.final_compliance
+        );
+        assert!(
+            rich.design_volume_fraction > lean.design_volume_fraction,
+            "expected richer design to retain higher design volume, got lean={} rich={}",
+            lean.design_volume_fraction,
+            rich.design_volume_fraction
+        );
+        assert!(
+            rich.physical_volume_fraction > lean.physical_volume_fraction,
+            "expected richer design to retain higher physical volume, got lean={} rich={}",
+            lean.physical_volume_fraction,
+            rich.physical_volume_fraction
+        );
+    }
 }
 

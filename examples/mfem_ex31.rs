@@ -36,6 +36,7 @@ fn main() {
     );
     println!("  h = {:.4e},  L² error = {:.4e}", result.h, result.l2_error);
     println!("  ||u||₂ = {:.4e}", result.solution_l2);
+    println!("  checksum = {:.8e}", result.solution_checksum);
     println!("  Σ = diag({DEFAULT_SIGMA_X:.3}, {DEFAULT_SIGMA_Y:.3})");
 }
 
@@ -48,6 +49,7 @@ struct CaseResult {
     h: f64,
     l2_error: f64,
     solution_l2: f64,
+    solution_checksum: f64,
 }
 
 fn solve_case(n: usize) -> CaseResult {
@@ -74,6 +76,11 @@ fn solve_case_with_sigma_and_scale(n: usize, sigma_x: f64, sigma_y: f64, scale: 
     let n_dofs = problem.n_dofs();
     let solved = problem.solve();
     let solution_l2 = solved.solution.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let solution_checksum = solved.solution
+        .iter()
+        .enumerate()
+        .map(|(i, value)| (i as f64 + 1.0) * value)
+        .sum::<f64>();
 
     CaseResult {
         n_dofs,
@@ -86,6 +93,7 @@ fn solve_case_with_sigma_and_scale(n: usize, sigma_x: f64, sigma_y: f64, scale: 
             [scale * (PI * x[1]).sin(), scale * (PI * x[0]).sin()]
         }),
         solution_l2,
+        solution_checksum,
     }
 }
 
@@ -206,5 +214,41 @@ mod tests {
             "expected anisotropic Maxwell error to scale linearly, got ratio {}",
             err_ratio
         );
+        let checksum_ratio = full.solution_checksum / half.solution_checksum.max(1e-30);
+        assert!(
+            (checksum_ratio - 2.0).abs() < 1.0e-6,
+            "expected anisotropic Maxwell checksum to scale linearly, got ratio {}",
+            checksum_ratio
+        );
+    }
+
+    #[test]
+    fn anisotropic_maxwell_sign_reversed_source_flips_solution() {
+        let positive = solve_case_with_sigma_and_scale(12, 4.0, 1.5, 1.0);
+        let negative = solve_case_with_sigma_and_scale(12, 4.0, 1.5, -1.0);
+
+        assert!(positive.converged && negative.converged);
+        assert!((positive.solution_l2 - negative.solution_l2).abs() < 1.0e-12,
+            "solution norm should be sign-invariant: positive={} negative={}",
+            positive.solution_l2,
+            negative.solution_l2);
+        assert!((positive.solution_checksum + negative.solution_checksum).abs() < 1.0e-10,
+            "checksum should flip sign: positive={} negative={}",
+            positive.solution_checksum,
+            negative.solution_checksum);
+        assert!((positive.l2_error - negative.l2_error).abs() < 1.0e-12,
+            "manufactured-solution error should be sign-invariant: positive={} negative={}",
+            positive.l2_error,
+            negative.l2_error);
+    }
+
+    #[test]
+    fn anisotropic_maxwell_zero_source_gives_trivial_solution() {
+        let result = solve_case_with_sigma_and_scale(12, 4.0, 1.5, 0.0);
+        assert!(result.converged);
+        assert!(result.solution_l2 < 1.0e-14, "expected zero solution norm, got {}", result.solution_l2);
+        assert!(result.solution_checksum.abs() < 1.0e-14,
+            "expected zero checksum, got {}", result.solution_checksum);
+        assert!(result.l2_error < 1.0e-14, "expected zero manufactured-solution error, got {}", result.l2_error);
     }
 }

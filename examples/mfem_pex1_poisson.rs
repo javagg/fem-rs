@@ -30,6 +30,23 @@ use fem_space::{H1Space, fe_space::FESpace};
 use fem_space::constraints::boundary_dofs;
 use fem_space::dof_manager::DofManager;
 
+#[derive(Clone, Copy)]
+struct RunArgs {
+    order: u8,
+    n_workers: usize,
+    mesh_n: usize,
+    use_metis: bool,
+    use_streaming: bool,
+}
+
+struct RunResult {
+    global_dofs: usize,
+    iterations: usize,
+    final_residual: f64,
+    converged: bool,
+    l2_err: f64,
+}
+
 fn main() {
     env_logger::init();
 
@@ -37,10 +54,13 @@ fn main() {
     let use_p2 = args.iter().any(|a| a == "--p2");
     let use_metis = args.iter().any(|a| a == "--metis");
     let use_streaming = args.iter().any(|a| a == "--streaming");
-    let order: u8 = if use_p2 { 2 } else { 1 };
-
-    let n_workers = parse_arg(&args, "--ranks").unwrap_or(2);
-    let mesh_n = parse_arg(&args, "--n").unwrap_or(16);
+    let run = RunArgs {
+        order: if use_p2 { 2 } else { 1 },
+        n_workers: parse_arg(&args, "--ranks").unwrap_or(2),
+        mesh_n: parse_arg(&args, "--n").unwrap_or(16),
+        use_metis,
+        use_streaming,
+    };
 
     let partitioner_name = match (use_metis, use_streaming) {
         (false, false) => "contiguous",
@@ -49,58 +69,60 @@ fn main() {
         (true,  true)  => "METIS+streaming",
     };
 
-    println!("=== fem-rs mfem_pex1: Parallel Poisson (P{order}) ===");
-    println!("  Workers: {n_workers}, Mesh: {mesh_n}x{mesh_n}, Partitioner: {partitioner_name}");
+    println!("=== fem-rs mfem_pex1: Parallel Poisson (P{}) ===", run.order);
+    println!("  Workers: {}, Mesh: {}x{}, Partitioner: {}", run.n_workers, run.mesh_n, run.mesh_n, partitioner_name);
 
-    let mesh = Arc::new(SimplexMesh::<2>::unit_square_tri(mesh_n));
+    let result = run_case(run);
+    println!("  Global DOFs: {}", result.global_dofs);
+    println!("  PCG: {} iters, residual = {:.3e}, converged = {}", result.iterations, result.final_residual, result.converged);
+    println!("  L2 error (pointwise): {:.6e}", result.l2_err);
+    println!("=== Done ===");
+}
 
-    let launcher = ThreadLauncher::new(WorkerConfig::new(n_workers));
+fn run_case(run: RunArgs) -> RunResult {
+    let mesh = Arc::new(SimplexMesh::<2>::unit_square_tri(run.mesh_n));
+    let result = Arc::new(std::sync::Mutex::new(None::<RunResult>));
+    let result_slot = Arc::clone(&result);
+
+    let launcher = ThreadLauncher::new(WorkerConfig::new(run.n_workers));
     launcher.launch(move |comm| {
         // 1. Build and partition mesh.
-        let par_mesh = if use_streaming {
+        let par_mesh = if run.use_streaming {
             let mesh_opt = if comm.is_root() { Some(&*mesh) } else { None };
-            if use_metis {
+            if run.use_metis {
                 partition_simplex_metis_streaming(mesh_opt, &comm, &MetisOptions::default())
                     .expect("METIS streaming partition failed")
             } else {
                 partition_simplex_streaming(mesh_opt, &comm)
                     .expect("streaming partition failed")
             }
-        } else if use_metis {
+        } else if run.use_metis {
             partition_simplex_metis(&mesh, &comm, &MetisOptions::default())
         } else {
             partition_simplex(&mesh, &comm)
         };
 
         let rank = comm.rank();
-        if rank == 0 {
-            println!("  Global nodes: {}, elements: {}",
-                par_mesh.global_n_nodes(), par_mesh.global_n_elems());
-        }
 
         // 2. Build parallel FE space.
         let local_mesh = par_mesh.local_mesh().clone();
-        let dm = DofManager::new(&local_mesh, order);
-        let local_space = H1Space::new(local_mesh, order);
-        let par_space = if order >= 2 {
+        let dm = DofManager::new(&local_mesh, run.order);
+        let local_space = H1Space::new(local_mesh, run.order);
+        let par_space = if run.order >= 2 {
             ParallelFESpace::new_with_dof_manager(local_space, &par_mesh, &dm, comm.clone())
         } else {
             ParallelFESpace::new(local_space, &par_mesh, comm.clone())
         };
 
-        if rank == 0 {
-            println!("  Global DOFs: {}", par_space.n_global_dofs());
-        }
-
         // 3. Parallel assembly.
-        let quad_order = if order >= 2 { 4 } else { 3 };
+        let quad_order = if run.order >= 2 { 4 } else { 3 };
         let diff = DiffusionIntegrator { kappa: 1.0 };
         let mut a_mat = ParAssembler::assemble_bilinear(&par_space, &[&diff], quad_order);
 
         let source = DomainSourceIntegrator::new(|x: &[f64]| {
             2.0 * PI * PI * (PI * x[0]).sin() * (PI * x[1]).sin()
         });
-        let rhs_quad = if order >= 2 { 5 } else { 3 };
+        let rhs_quad = if run.order >= 2 { 5 } else { 3 };
         let mut rhs = ParAssembler::assemble_linear(&par_space, &[&source], rhs_quad);
 
         // 4. Apply Dirichlet BCs: u=0 on all boundary faces.
@@ -124,11 +146,6 @@ fn main() {
         };
         let res = par_solve_pcg_jacobi(&a_mat, &rhs, &mut u, &cfg).unwrap();
 
-        if rank == 0 {
-            println!("  PCG: {} iters, residual = {:.3e}, converged = {}",
-                res.iterations, res.final_residual, res.converged);
-        }
-
         // 6. Compute L2 error against exact solution u_exact = sin(pi*x)*sin(pi*y).
         let n_owned = dof_part.n_owned_dofs;
         let err_dm = par_space.local_space().dof_manager();
@@ -145,14 +162,85 @@ fn main() {
         let l2_err = (global_err_sq / n_global).sqrt();
 
         if rank == 0 {
-            println!("  L2 error (pointwise): {l2_err:.6e}");
-            println!("=== Done ===");
+            *result_slot.lock().expect("mfem_pex1 result mutex poisoned") = Some(RunResult {
+                global_dofs: par_space.n_global_dofs(),
+                iterations: res.iterations,
+                final_residual: res.final_residual,
+                converged: res.converged,
+                l2_err,
+            });
         }
     });
+
+    let final_result = result
+        .lock()
+        .expect("mfem_pex1 result mutex poisoned after launch")
+        .take()
+        .expect("rank 0 did not publish mfem_pex1 result");
+    final_result
 }
 
 fn parse_arg(args: &[String], flag: &str) -> Option<usize> {
     args.iter().position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
         .and_then(|v| v.parse().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pex1_poisson_p1_coarse_case_converges() {
+        let result = run_case(RunArgs {
+            order: 1,
+            n_workers: 2,
+            mesh_n: 8,
+            use_metis: false,
+            use_streaming: false,
+        });
+        assert!(result.converged);
+        assert_eq!(result.global_dofs, 81);
+        assert!(result.final_residual < 1.0e-8, "residual too large: {}", result.final_residual);
+        assert!(result.l2_err < 1.0e-2, "P1 L2 error too large: {}", result.l2_err);
+    }
+
+    #[test]
+    fn pex1_poisson_p2_coarse_case_converges() {
+        let result = run_case(RunArgs {
+            order: 2,
+            n_workers: 2,
+            mesh_n: 8,
+            use_metis: false,
+            use_streaming: false,
+        });
+        assert!(result.converged);
+        assert_eq!(result.global_dofs, 289);
+        assert!(result.final_residual < 1.0e-8, "residual too large: {}", result.final_residual);
+        assert!(result.l2_err < 2.0e-4, "P2 L2 error too large: {}", result.l2_err);
+    }
+
+    #[test]
+    fn pex1_poisson_p2_partition_is_invariant_between_two_and_four_ranks() {
+        let two = run_case(RunArgs {
+            order: 2,
+            n_workers: 2,
+            mesh_n: 8,
+            use_metis: false,
+            use_streaming: false,
+        });
+        let four = run_case(RunArgs {
+            order: 2,
+            n_workers: 4,
+            mesh_n: 8,
+            use_metis: false,
+            use_streaming: false,
+        });
+        assert!(two.converged && four.converged);
+        assert_eq!(two.global_dofs, four.global_dofs);
+        assert!((two.l2_err - four.l2_err).abs() < 1.0e-12,
+            "P2 L2 error mismatch: two={} four={}", two.l2_err, four.l2_err);
+        assert!((two.final_residual - four.final_residual).abs() < 1.0e-8,
+            "P2 residual mismatch: two={} four={}", two.final_residual, four.final_residual);
+    }
 }

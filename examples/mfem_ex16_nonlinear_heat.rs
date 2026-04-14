@@ -33,7 +33,19 @@ use std::f64::consts::PI;
 
 use fem_assembly::{Assembler, nonlinear::{NonlinearDiffusionForm, NewtonSolver, NewtonConfig}};
 use fem_mesh::SimplexMesh;
-use fem_space::{H1Space, fe_space::FESpace, constraints::{apply_dirichlet, boundary_dofs}};
+use fem_space::{H1Space, fe_space::FESpace, constraints::boundary_dofs};
+
+struct SolveResult {
+    n: usize,
+    newton_tol: f64,
+    n_dofs: usize,
+    iterations: usize,
+    final_residual: f64,
+    converged: bool,
+    rms_error: f64,
+    solution_norm: f64,
+    solution_checksum: f64,
+}
 
 fn main() {
     let args = parse_args();
@@ -41,11 +53,28 @@ fn main() {
     println!("  Mesh: {}×{} subdivisions, P1 elements", args.n, args.n);
     println!("  κ(u) = 1 + u²,  Newton tol = {:.0e}", args.newton_tol);
 
+    let result = solve_case(args.n, args.newton_tol, 1.0);
+
+    println!("  Confirmed Newton tol = {:.0e}", result.newton_tol);
+    println!("  DOFs: {}", result.n_dofs);
+    if result.converged {
+        println!("\n  Newton converged: {} iters, ‖F‖ = {:.3e}", result.iterations, result.final_residual);
+    } else {
+        println!("\n  Newton did NOT converge: {} iters, ‖F‖ = {:.3e}", result.iterations, result.final_residual);
+    }
+    let h = 1.0 / result.n as f64;
+    println!("  h = {h:.4e},  nodal RMS error = {:.4e}", result.rms_error);
+    println!("  ||u_h||_L2 = {:.4e}", result.solution_norm);
+    println!("  checksum = {:.8e}", result.solution_checksum);
+    println!("  (Expected O(h²) for P1 manufactured solution)");
+    println!("\nDone.");
+}
+
+fn solve_case(n: usize, newton_tol: f64, exact_scale: f64) -> SolveResult {
     // ─── 1. Mesh and H¹ space ─────────────────────────────────────────────────
-    let mesh  = SimplexMesh::<2>::unit_square_tri(args.n);
+    let mesh  = SimplexMesh::<2>::unit_square_tri(n);
     let space = H1Space::new(mesh, 1);
-    let n     = space.n_dofs();
-    println!("  DOFs: {n}");
+    let n_dofs = space.n_dofs();
 
     // ─── 2. Identify Dirichlet DOFs ───────────────────────────────────────────
     let dm   = space.dof_manager();
@@ -67,14 +96,14 @@ fn main() {
     let src = DomainSourceIntegrator::new(|x: &[f64]| {
         let (sx, sy) = ((PI * x[0]).sin(), (PI * x[1]).sin());
         let (cx, cy) = ((PI * x[0]).cos(), (PI * x[1]).cos());
-        let u_star = sx * sy;
+        let u_star = exact_scale * sx * sy;
         let kappa  = 1.0 + u_star * u_star;
         let lap_u  = -2.0 * PI * PI * u_star;
         let grad_kappa_dot_grad_u = 2.0 * u_star * PI * PI *
             (cx * cx * sy * sy + sx * sx * cy * cy);
         -kappa * lap_u - grad_kappa_dot_grad_u
     });
-    let mesh2 = SimplexMesh::<2>::unit_square_tri(args.n);
+    let mesh2 = SimplexMesh::<2>::unit_square_tri(n);
     let space2 = H1Space::new(mesh2, 1);
     let rhs = Assembler::assemble_linear(&space2, &[&src], 5);
 
@@ -88,35 +117,49 @@ fn main() {
 
     // ─── 5. Newton solve ──────────────────────────────────────────────────────
     let cfg = NewtonConfig {
-        atol:       args.newton_tol,
-        rtol:       args.newton_tol * 1e2,
+        atol:       newton_tol,
+        rtol:       newton_tol * 1e2,
         max_iter:   50,
-        linear_tol: args.newton_tol * 0.1,
+        linear_tol: newton_tol * 0.1,
         verbose:    true,
     };
     let solver = NewtonSolver::new(cfg);
-    let mut u = vec![0.0_f64; n];
+    let mut u = vec![0.0_f64; n_dofs];
 
-    match solver.solve(&form, &rhs, &mut u) {
-        Ok(r) => println!("\n  Newton converged: {} iters, ‖F�?= {:.3e}", r.iterations, r.final_residual),
-        Err(r) => println!("\n  Newton did NOT converge: {} iters, ‖F�?= {:.3e}", r.iterations, r.final_residual),
-    }
+    let (converged, iterations, final_residual) = match solver.solve(&form, &rhs, &mut u) {
+        Ok(r) => (true, r.iterations, r.final_residual),
+        Err(r) => (false, r.iterations, r.final_residual),
+    };
 
     // ─── 6. L² error ─────────────────────────────────────────────────────────
     let dm2 = space2.dof_manager();
-    let l2 = {
+    let rms_error = {
         let mut err = 0.0_f64;
-        for i in 0..n {
+        for i in 0..n_dofs {
             let x = dm2.dof_coord(i as u32);
-            let u_ex = (PI * x[0]).sin() * (PI * x[1]).sin();
+            let u_ex = exact_scale * (PI * x[0]).sin() * (PI * x[1]).sin();
             err += (u[i] - u_ex).powi(2);
         }
-        (err / n as f64).sqrt()
+        (err / n_dofs as f64).sqrt()
     };
-    let h = 1.0 / args.n as f64;
-    println!("  h = {h:.4e},  nodal RMS error = {l2:.4e}");
-    println!("  (Expected O(h²) for P1 manufactured solution)");
-    println!("\nDone.");
+    let solution_norm = u.iter().map(|value| value * value).sum::<f64>().sqrt();
+    let solution_checksum = u
+        .iter()
+        .enumerate()
+        .map(|(i, value)| (i as f64 + 1.0) * value)
+        .sum::<f64>();
+
+    SolveResult {
+        n,
+        newton_tol,
+        n_dofs,
+        iterations,
+        final_residual,
+        converged,
+        rms_error,
+        solution_norm,
+        solution_checksum,
+    }
 }
 
 // ─── CLI ─────────────────────────────────────────────────────────────────────
@@ -134,5 +177,65 @@ fn parse_args() -> Args {
         }
     }
     a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ex16_nonlinear_heat_coarse_case_converges_with_reasonable_error() {
+        let result = solve_case(8, 1e-10, 1.0);
+        assert!(result.converged);
+        assert_eq!(result.n_dofs, 81);
+        assert!(result.iterations <= 15, "Newton took too many iterations: {}", result.iterations);
+        assert!(result.final_residual < 1.0e-8, "Newton residual too large: {}", result.final_residual);
+        assert!(result.rms_error < 3.5e-3, "coarse-grid RMS error too large: {}", result.rms_error);
+    }
+
+    #[test]
+    fn ex16_nonlinear_heat_refinement_improves_accuracy() {
+        let coarse = solve_case(8, 1e-10, 1.0);
+        let fine = solve_case(16, 1e-10, 1.0);
+        assert!(fine.rms_error < coarse.rms_error,
+            "refinement should reduce RMS error: coarse={} fine={}", coarse.rms_error, fine.rms_error);
+        assert!(fine.rms_error < 1.0e-3, "fine-grid RMS error too large: {}", fine.rms_error);
+    }
+
+    #[test]
+    fn ex16_nonlinear_heat_looser_newton_tolerance_preserves_solution_accuracy() {
+        let tight = solve_case(16, 1e-10, 1.0);
+        let loose = solve_case(16, 1e-8, 1.0);
+        assert!(tight.converged && loose.converged);
+        assert!(loose.iterations <= tight.iterations,
+            "looser tolerance should not need more iterations: tight={} loose={}", tight.iterations, loose.iterations);
+        assert!((loose.rms_error - tight.rms_error).abs() < 1.0e-6,
+            "solution accuracy drifted under looser Newton tolerance: tight={} loose={}", tight.rms_error, loose.rms_error);
+    }
+
+    #[test]
+    fn ex16_nonlinear_heat_sign_reversed_manufactured_solution_flips_state() {
+        let positive = solve_case(16, 1e-10, 1.0);
+        let negative = solve_case(16, 1e-10, -1.0);
+        assert!(positive.converged && negative.converged);
+        assert!((positive.solution_norm - negative.solution_norm).abs() < 1.0e-12);
+        assert!((positive.solution_checksum + negative.solution_checksum).abs() < 1.0e-10,
+            "solution checksum should flip sign: positive={} negative={}",
+            positive.solution_checksum,
+            negative.solution_checksum);
+        assert!((positive.rms_error - negative.rms_error).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn ex16_nonlinear_heat_zero_manufactured_state_gives_trivial_solution() {
+        let result = solve_case(16, 1e-10, 0.0);
+        assert!(result.converged, "zero-source nonlinear heat solve should converge");
+        assert!(result.final_residual < 1.0e-12, "zero-source residual too large: {}", result.final_residual);
+        assert!(result.rms_error < 1.0e-14, "zero manufactured state should have zero RMS error: {}", result.rms_error);
+        assert!(result.solution_norm < 1.0e-14, "zero manufactured state should give zero solution norm: {}", result.solution_norm);
+        assert!(result.solution_checksum.abs() < 1.0e-14,
+            "zero manufactured state should give zero checksum: {}",
+            result.solution_checksum);
+    }
 }
 

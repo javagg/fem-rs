@@ -26,6 +26,24 @@ use fem_mesh::SimplexMesh;
 use fem_solver::{solve_pcg_jacobi, SolverConfig};
 use fem_space::{VectorH1Space, fe_space::FESpace, constraints::{apply_dirichlet, boundary_dofs}};
 
+struct SolveResult {
+    n: usize,
+    order: u8,
+    n_nodes: usize,
+    n_elements: usize,
+    n_dofs: usize,
+    n_scalar_dofs: usize,
+    iterations: usize,
+    final_residual: f64,
+    converged: bool,
+    ux_max: f64,
+    uy_max: f64,
+    ux_norm: f64,
+    uy_norm: f64,
+    ux_checksum: f64,
+    uy_checksum: f64,
+}
+
 fn main() {
     let args = parse_args();
     println!("=== fem-rs Example 2: Linear Elasticity ===");
@@ -38,32 +56,52 @@ fn main() {
     let mu    = e_mod / (2.0 * (1.0 + nu));
     println!("  λ = {lam:.4},  μ = {mu:.4}");
 
-    // ─── 1. Mesh and vector space ─────────────────────────────────────────────
-    let mesh = SimplexMesh::<2>::unit_square_tri(args.n);
-    println!("  Nodes: {}, Elements: {}", mesh.n_nodes(), mesh.n_elems());
+    let result = solve_case(args.n, args.order, -1.0);
 
-    let space = VectorH1Space::new(mesh, args.order, 2);
-    let n = space.n_dofs();
+    println!("  Confirmed mesh: {}×{} subdivisions, P{} elements", result.n, result.n, result.order);
+    println!("  Nodes: {}, Elements: {}", result.n_nodes, result.n_elements);
+    println!("  DOFs: {}  ({} per component)", result.n_dofs, result.n_scalar_dofs);
+    println!(
+        "  Solve: {} iters, residual = {:.3e}, converged = {}",
+        result.iterations, result.final_residual, result.converged
+    );
+    println!("  max|u_x| = {:.4e}", result.ux_max);
+    println!("  max|u_y| = {:.4e}", result.uy_max);
+    println!("  ||u_x||_L2 = {:.4e},  ||u_y||_L2 = {:.4e}", result.ux_norm, result.uy_norm);
+    println!("  checksum(u_x) = {:.8e},  checksum(u_y) = {:.8e}", result.ux_checksum, result.uy_checksum);
+    println!("\nDone.");
+}
+
+fn solve_case(n: usize, order: u8, body_force_y: f64) -> SolveResult {
+    let e_mod = 1.0_f64;
+    let nu    = 0.3_f64;
+    let lam   = e_mod * nu / ((1.0 + nu) * (1.0 - 2.0 * nu));
+    let mu    = e_mod / (2.0 * (1.0 + nu));
+
+    // ─── 1. Mesh and vector space ─────────────────────────────────────────────
+    let mesh = SimplexMesh::<2>::unit_square_tri(n);
+
+    let space = VectorH1Space::new(mesh, order, 2);
+    let n_dofs = space.n_dofs();
     let n_scalar = space.n_scalar_dofs();
-    println!("  DOFs: {n}  ({n_scalar} per component)");
 
     // ─── 2. Assemble stiffness matrix ─────────────────────────────────────────
     let elast = ElasticityIntegrator { lambda: lam, mu };
-    let mut mat = Assembler::assemble_bilinear(&space, &[&elast], args.order as u8 * 2 + 1);
+    let mut mat = Assembler::assemble_bilinear(&space, &[&elast], order as u8 * 2 + 1);
 
     // ─── 3. Gravity body force: f = (0, -ρg)  �?assembled into RHS ───────────
     //  Body force in x: 0,  in y: -1
     //  VectorH1Space DOF layout: [u_x DOFs | u_y DOFs]
     //  DomainSourceIntegrator works on scalar spaces; handle manually.
-    let mut rhs = vec![0.0_f64; n];
+    let mut rhs = vec![0.0_f64; n_dofs];
     // For the y-component load, we need �?(-1) v_y dx for each y-DOF.
     // In block DOF ordering, y-DOFs start at offset n_scalar.
     // Assemble a scalar mass-times-one over a temporary scalar space:
     {
-        let mesh2 = SimplexMesh::<2>::unit_square_tri(args.n);
-        let scalar_space = fem_space::H1Space::new(mesh2, args.order);
-        let fy_integrator = DomainSourceIntegrator::new(|_x: &[f64]| -1.0_f64);
-        let fy = Assembler::assemble_linear(&scalar_space, &[&fy_integrator], args.order as u8 * 2 + 1);
+        let mesh2 = SimplexMesh::<2>::unit_square_tri(n);
+        let scalar_space = fem_space::H1Space::new(mesh2, order);
+        let fy_integrator = DomainSourceIntegrator::new(|_x: &[f64]| body_force_y);
+        let fy = Assembler::assemble_linear(&scalar_space, &[&fy_integrator], order as u8 * 2 + 1);
         // Add to y-component block of RHS (offset n_scalar)
         for (i, &v) in fy.iter().enumerate() {
             rhs[n_scalar + i] += v;
@@ -85,24 +123,46 @@ fn main() {
     apply_dirichlet(&mut mat, &mut rhs, &clamped, &vals);
 
     // ─── 5. Solve ─────────────────────────────────────────────────────────────
-    let mut u = vec![0.0_f64; n];
+    let mut u = vec![0.0_f64; n_dofs];
     let cfg = SolverConfig { rtol: 1e-10, atol: 0.0, max_iter: 10_000, verbose: false, ..SolverConfig::default() };
     let res = solve_pcg_jacobi(&mat, &rhs, &mut u, &cfg)
         .expect("elasticity solve failed");
 
-    println!(
-        "  Solve: {} iters, residual = {:.3e}, converged = {}",
-        res.iterations, res.final_residual, res.converged
-    );
-
     // ─── 6. Post-process ──────────────────────────────────────────────────────
     let ux = &u[..n_scalar];
     let uy = &u[n_scalar..];
-    let u_max = uy.iter().cloned().fold(0.0_f64, |a, b| a.abs().max(b.abs()));
+    let uy_max = uy.iter().cloned().fold(0.0_f64, |a, b| a.abs().max(b.abs()));
     let ux_max = ux.iter().cloned().fold(0.0_f64, |a, b| a.abs().max(b.abs()));
-    println!("  max|u_x| = {ux_max:.4e}");
-    println!("  max|u_y| = {u_max:.4e}");
-    println!("\nDone.");
+    let ux_norm = ux.iter().map(|value| value * value).sum::<f64>().sqrt();
+    let uy_norm = uy.iter().map(|value| value * value).sum::<f64>().sqrt();
+    let ux_checksum = ux
+        .iter()
+        .enumerate()
+        .map(|(i, value)| (i as f64 + 1.0) * value)
+        .sum::<f64>();
+    let uy_checksum = uy
+        .iter()
+        .enumerate()
+        .map(|(i, value)| (i as f64 + 1.0) * value)
+        .sum::<f64>();
+
+    SolveResult {
+        n,
+        order,
+        n_nodes: space.mesh().n_nodes(),
+        n_elements: space.mesh().n_elems(),
+        n_dofs,
+        n_scalar_dofs: n_scalar,
+        iterations: res.iterations,
+        final_residual: res.final_residual,
+        converged: res.converged,
+        ux_max,
+        uy_max,
+        ux_norm,
+        uy_norm,
+        ux_checksum,
+        uy_checksum,
+    }
 }
 
 struct Args { n: usize, order: u8 }
@@ -118,5 +178,60 @@ fn parse_args() -> Args {
         }
     }
     a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ex2_elasticity_coarse_case_converges_with_vertical_dominance() {
+        let result = solve_case(8, 1, -1.0);
+        assert_eq!(result.n_nodes, 81);
+        assert_eq!(result.n_elements, 128);
+        assert_eq!(result.n_dofs, 162);
+        assert!(result.converged);
+        assert!(result.final_residual < 1.0e-9, "solver residual too large: {}", result.final_residual);
+        assert!(result.uy_max > result.ux_max, "vertical displacement should dominate: ux={} uy={}", result.ux_max, result.uy_max);
+        assert!(result.uy_norm > result.ux_norm, "vertical norm should dominate: ux={} uy={}", result.ux_norm, result.uy_norm);
+    }
+
+    #[test]
+    fn ex2_elasticity_zero_body_force_gives_trivial_solution() {
+        let result = solve_case(8, 1, 0.0);
+        assert!(result.converged);
+        assert!(result.ux_norm < 1.0e-12, "u_x norm should vanish: {}", result.ux_norm);
+        assert!(result.uy_norm < 1.0e-12, "u_y norm should vanish: {}", result.uy_norm);
+        assert!(result.ux_max < 1.0e-12, "u_x max should vanish: {}", result.ux_max);
+        assert!(result.uy_max < 1.0e-12, "u_y max should vanish: {}", result.uy_max);
+    }
+
+    #[test]
+    fn ex2_elasticity_solution_scales_linearly_with_body_force() {
+        let unit = solve_case(8, 1, -1.0);
+        let doubled = solve_case(8, 1, -2.0);
+        assert!(unit.converged && doubled.converged);
+        assert!((doubled.ux_norm / unit.ux_norm - 2.0).abs() < 1.0e-9,
+            "u_x norm ratio mismatch: unit={} doubled={}", unit.ux_norm, doubled.ux_norm);
+        assert!((doubled.uy_norm / unit.uy_norm - 2.0).abs() < 1.0e-9,
+            "u_y norm ratio mismatch: unit={} doubled={}", unit.uy_norm, doubled.uy_norm);
+        assert!((doubled.ux_checksum / unit.ux_checksum - 2.0).abs() < 1.0e-9,
+            "u_x checksum ratio mismatch: unit={} doubled={}", unit.ux_checksum, doubled.ux_checksum);
+        assert!((doubled.uy_checksum / unit.uy_checksum - 2.0).abs() < 1.0e-9,
+            "u_y checksum ratio mismatch: unit={} doubled={}", unit.uy_checksum, doubled.uy_checksum);
+    }
+
+    #[test]
+    fn ex2_elasticity_sign_reversed_body_force_flips_displacement() {
+        let downward = solve_case(8, 1, -1.0);
+        let upward = solve_case(8, 1, 1.0);
+        assert!(downward.converged && upward.converged);
+        assert!((downward.ux_norm - upward.ux_norm).abs() < 1.0e-12);
+        assert!((downward.uy_norm - upward.uy_norm).abs() < 1.0e-12);
+        assert!((downward.ux_checksum + upward.ux_checksum).abs() < 1.0e-10,
+            "u_x checksum should flip sign: down={} up={}", downward.ux_checksum, upward.ux_checksum);
+        assert!((downward.uy_checksum + upward.uy_checksum).abs() < 1.0e-10,
+            "u_y checksum should flip sign: down={} up={}", downward.uy_checksum, upward.uy_checksum);
+    }
 }
 

@@ -6,20 +6,96 @@
 use fem_io_hdf5_parallel::{
     CheckpointBundleF64, CheckpointMeshMeta, Hdf5ParallelError, IoBackend, ParallelIoConfig,
     RankFieldF64, materialize_global_field_f64, read_checkpoint_field_f64_at_step,
-    read_checkpoint_field_f64_latest, validate_checkpoint_layout, write_checkpoint_step_bundle_f64,
+    read_checkpoint_field_f64_latest, read_global_field_f64, validate_checkpoint_layout, write_checkpoint_step_bundle_f64,
     write_xdmf_polyvertex_scalar_timeseries_sidecar,
 };
 
 fn main() {
     let args = parse_args();
 
-    println!("=== mfem_ex43_hdf5_checkpoint (baseline) ===");
-    println!("  out_h5={}, out_xdmf={}", args.out_h5, args.out_xdmf);
-    println!("  backend={}", match args.backend { IoBackend::Partitioned => "partitioned", IoBackend::MpiCollective => "mpi" });
-    println!("  restart_step={}", args.restart_step.map_or("latest".into(), |s| s.to_string()));
+    match run_checkpoint_demo(&args) {
+        DemoOutcome::Completed(result) => {
+            println!("=== mfem_ex43_hdf5_checkpoint (baseline) ===");
+            println!("  out_h5={}, out_xdmf={}", args.out_h5, args.out_xdmf);
+            println!("  backend={}", match args.backend { IoBackend::Partitioned => "partitioned", IoBackend::MpiCollective => "mpi" });
+            println!("  restart_step={}", args.restart_step.map_or("latest".into(), |s| s.to_string()));
+            println!(
+                "  validation: schema={}, steps={}, warnings={}",
+                result.schema_version,
+                result.layout_steps,
+                result.layout_warnings
+            );
+            println!(
+                "  restart: step={}, time={:.3}, offset={}, len={}, local={:?}",
+                result.restart_step,
+                result.restart_time,
+                result.restart_global_offset,
+                result.restart_global_len,
+                result.restart_values
+            );
+            println!("  PASS");
+        }
+        DemoOutcome::Hdf5Disabled => {
+            println!("=== mfem_ex43_hdf5_checkpoint (baseline) ===");
+            println!("  out_h5={}, out_xdmf={}", args.out_h5, args.out_xdmf);
+            println!("  backend=partitioned");
+            println!("  restart_step={}", args.restart_step.map_or("latest".into(), |s| s.to_string()));
+            println!("  HDF5 backend disabled (build without feature `hdf5`)");
+            println!("  To enable real checkpoint I/O: cargo run --example mfem_ex43_hdf5_checkpoint --features fem-io-hdf5-parallel/hdf5");
+            println!("  PASS (API fallback verified)");
+        }
+        DemoOutcome::Hdf5MpiDisabled => {
+            println!("=== mfem_ex43_hdf5_checkpoint (baseline) ===");
+            println!("  out_h5={}, out_xdmf={}", args.out_h5, args.out_xdmf);
+            println!("  backend=mpi");
+            println!("  restart_step={}", args.restart_step.map_or("latest".into(), |s| s.to_string()));
+            println!("  MPI HDF5 backend disabled (build without feature `hdf5-mpi`)");
+            println!("  Use partitioned mode or enable: cargo run --example mfem_ex43_hdf5_checkpoint --features fem-io-hdf5-parallel/hdf5-mpi -- --backend mpi");
+            println!("  PASS (MPI backend fallback verified)");
+        }
+    }
+}
 
+#[derive(Debug)]
+enum DemoOutcome {
+    Completed(DemoResult),
+    Hdf5Disabled,
+    Hdf5MpiDisabled,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug)]
+struct DemoResult {
+    schema_version: u32,
+    layout_steps: usize,
+    layout_warnings: usize,
+    restart_step: u64,
+    restart_time: f64,
+    restart_global_offset: u64,
+    restart_global_len: u64,
+    restart_values: Vec<f64>,
+    latest_rank0_values: Vec<f64>,
+    latest_rank1_values: Vec<f64>,
+    latest_global_values: Vec<f64>,
+    xdmf_text: String,
+}
+
+fn run_checkpoint_demo(args: &Args) -> DemoOutcome {
     let world_size = 2usize;
     let global_len = 8u64;
+
+    if let Some(parent) = std::path::Path::new(&args.out_h5).parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+    if let Some(parent) = std::path::Path::new(&args.out_xdmf).parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+    let _ = std::fs::remove_file(&args.out_h5);
+    let _ = std::fs::remove_file(&args.out_xdmf);
 
     // Synthetic transient field on 2 rank partitions.
     // rank 0 owns [0..4), rank 1 owns [4..8).
@@ -32,18 +108,8 @@ fn main() {
     for step in 0..=2u64 {
         let t = 0.1 * step as f64;
 
-        let rank0 = RankFieldF64 {
-            name: "u".into(),
-            global_offset: 0,
-            global_len,
-            values: (0..4).map(|i| (i as f64) + t).collect(),
-        };
-        let rank1 = RankFieldF64 {
-            name: "u".into(),
-            global_offset: 4,
-            global_len,
-            values: (4..8).map(|i| (i as f64) + t).collect(),
-        };
+        let rank0 = make_rank_field(0, global_len, t);
+        let rank1 = make_rank_field(1, global_len, t);
 
         for (rank, field) in [(0usize, rank0), (1usize, rank1)] {
             let cfg = ParallelIoConfig { world_size, rank };
@@ -53,18 +119,8 @@ fn main() {
             };
             match write_checkpoint_step_bundle_f64(&args.out_h5, cfg, step, t, &bundle, args.backend) {
                 Ok(()) => {}
-                Err(Hdf5ParallelError::Hdf5FeatureDisabled) => {
-                    println!("  HDF5 backend disabled (build without feature `hdf5`)");
-                    println!("  To enable real checkpoint I/O: cargo run --example mfem_ex43_hdf5_checkpoint --features fem-io-hdf5-parallel/hdf5");
-                    println!("  PASS (API fallback verified)");
-                    return;
-                }
-                Err(Hdf5ParallelError::Hdf5MpiFeatureDisabled) => {
-                    println!("  MPI HDF5 backend disabled (build without feature `hdf5-mpi`)");
-                    println!("  Use partitioned mode or enable: cargo run --example mfem_ex43_hdf5_checkpoint --features fem-io-hdf5-parallel/hdf5-mpi -- --backend mpi");
-                    println!("  PASS (MPI backend fallback verified)");
-                    return;
-                }
+                Err(Hdf5ParallelError::Hdf5FeatureDisabled) => return DemoOutcome::Hdf5Disabled,
+                Err(Hdf5ParallelError::Hdf5MpiFeatureDisabled) => return DemoOutcome::Hdf5MpiDisabled,
                 Err(e) => panic!("checkpoint write failed: {e}"),
             }
         }
@@ -82,12 +138,6 @@ fn main() {
         .expect("xdmf write failed");
 
     let report = validate_checkpoint_layout(&args.out_h5, Some(world_size)).expect("layout validation failed");
-    println!(
-        "  validation: schema={}, steps={}, warnings={}",
-        report.schema_version,
-        report.steps.len(),
-        report.warnings.len()
-    );
 
     // Restart read for rank 1 from selected step (or latest).
     let restart = if let Some(step) = args.restart_step {
@@ -106,17 +156,53 @@ fn main() {
     }
     .expect("restart read failed");
 
-    println!(
-        "  restart: step={}, time={:.3}, offset={}, len={}, local={:?}",
-        restart.step, restart.time, restart.global_offset, restart.global_len, restart.values
-    );
+    let latest_rank0 = read_checkpoint_field_f64_latest(
+        &args.out_h5,
+        ParallelIoConfig { world_size, rank: 0 },
+        "u",
+    )
+    .expect("latest rank-0 read failed");
+    let latest_rank1 = read_checkpoint_field_f64_latest(
+        &args.out_h5,
+        ParallelIoConfig { world_size, rank: 1 },
+        "u",
+    )
+    .expect("latest rank-1 read failed");
+    let latest_global = read_global_field_f64(&args.out_h5, 2, "u")
+        .expect("read global field failed");
+    let xdmf_text = std::fs::read_to_string(&args.out_xdmf)
+        .expect("xdmf read failed");
 
     assert_eq!(restart.step, 2);
     assert_eq!(restart.global_offset, 4);
     assert_eq!(restart.global_len, 8);
     assert_eq!(restart.values.len(), 4);
 
-    println!("  PASS");
+    DemoOutcome::Completed(DemoResult {
+        schema_version: report.schema_version,
+        layout_steps: report.steps.len(),
+        layout_warnings: report.warnings.len(),
+        restart_step: restart.step,
+        restart_time: restart.time,
+        restart_global_offset: restart.global_offset,
+        restart_global_len: restart.global_len,
+        restart_values: restart.values,
+        latest_rank0_values: latest_rank0.values,
+        latest_rank1_values: latest_rank1.values,
+        latest_global_values: latest_global,
+        xdmf_text,
+    })
+}
+
+fn make_rank_field(rank: usize, global_len: u64, t: f64) -> RankFieldF64 {
+    let start = if rank == 0 { 0 } else { 4 };
+    let end = start + 4;
+    RankFieldF64 {
+        name: "u".into(),
+        global_offset: start as u64,
+        global_len,
+        values: (start..end).map(|i| i as f64 + t).collect(),
+    }
 }
 
 struct Args {
@@ -155,5 +241,106 @@ fn parse_args() -> Args {
         }
     }
     args
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_paths(tag: &str) -> (String, String) {
+        let mut base = std::env::temp_dir();
+        let unique = format!(
+            "fem_ex43_{}_{}_{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("valid clock")
+                .as_nanos()
+        );
+        base.push(unique);
+        let h5 = base.with_extension("h5").to_string_lossy().to_string();
+        let xdmf = base.with_extension("xdmf").to_string_lossy().to_string();
+        (h5, xdmf)
+    }
+
+    #[test]
+    fn ex43_checkpoint_latest_restart_matches_expected_partition() {
+        let (out_h5, out_xdmf) = temp_paths("latest");
+        let args = Args {
+            out_h5: out_h5.clone(),
+            out_xdmf: out_xdmf.clone(),
+            backend: IoBackend::Partitioned,
+            restart_step: None,
+        };
+
+        match run_checkpoint_demo(&args) {
+            DemoOutcome::Completed(result) => {
+                assert_eq!(result.layout_steps, 3);
+                assert_eq!(result.restart_step, 2);
+                assert!((result.restart_time - 0.2).abs() < 1.0e-12);
+                assert_eq!(result.restart_global_offset, 4);
+                assert_eq!(result.restart_global_len, 8);
+                assert_eq!(result.restart_values, vec![4.2, 5.2, 6.2, 7.2]);
+                assert_eq!(result.latest_rank0_values, vec![0.2, 1.2, 2.2, 3.2]);
+                assert_eq!(result.latest_rank1_values, vec![4.2, 5.2, 6.2, 7.2]);
+                assert_eq!(result.latest_global_values, vec![0.2, 1.2, 2.2, 3.2, 4.2, 5.2, 6.2, 7.2]);
+                assert!(result.xdmf_text.contains("CollectionType=\"Temporal\""));
+                assert!(result.xdmf_text.contains("/global_fields/step_00000002/u"));
+            }
+            DemoOutcome::Hdf5Disabled => {}
+            DemoOutcome::Hdf5MpiDisabled => panic!("partitioned backend should not report hdf5-mpi feature disabled"),
+        }
+
+        let _ = std::fs::remove_file(out_h5);
+        let _ = std::fs::remove_file(out_xdmf);
+    }
+
+    #[test]
+    fn ex43_checkpoint_can_restart_from_requested_step() {
+        let (out_h5, out_xdmf) = temp_paths("step1");
+        let args = Args {
+            out_h5: out_h5.clone(),
+            out_xdmf: out_xdmf.clone(),
+            backend: IoBackend::Partitioned,
+            restart_step: Some(1),
+        };
+
+        match run_checkpoint_demo(&args) {
+            DemoOutcome::Completed(result) => {
+                assert_eq!(result.restart_step, 1);
+                assert!((result.restart_time - 0.1).abs() < 1.0e-12);
+                assert_eq!(result.restart_values, vec![4.1, 5.1, 6.1, 7.1]);
+                assert_eq!(result.latest_global_values, vec![0.2, 1.2, 2.2, 3.2, 4.2, 5.2, 6.2, 7.2]);
+            }
+            DemoOutcome::Hdf5Disabled => {}
+            DemoOutcome::Hdf5MpiDisabled => panic!("partitioned backend should not report hdf5-mpi feature disabled"),
+        }
+
+        let _ = std::fs::remove_file(out_h5);
+        let _ = std::fs::remove_file(out_xdmf);
+    }
+
+    #[test]
+    fn ex43_mpi_backend_reports_feature_gate_or_succeeds() {
+        let (out_h5, out_xdmf) = temp_paths("mpi");
+        let args = Args {
+            out_h5: out_h5.clone(),
+            out_xdmf: out_xdmf.clone(),
+            backend: IoBackend::MpiCollective,
+            restart_step: None,
+        };
+
+        match run_checkpoint_demo(&args) {
+            DemoOutcome::Completed(result) => {
+                assert_eq!(result.layout_steps, 3);
+                assert_eq!(result.restart_values.len(), 4);
+            }
+            DemoOutcome::Hdf5Disabled | DemoOutcome::Hdf5MpiDisabled => {}
+        }
+
+        let _ = std::fs::remove_file(out_h5);
+        let _ = std::fs::remove_file(out_xdmf);
+    }
 }
 

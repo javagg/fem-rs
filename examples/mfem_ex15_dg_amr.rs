@@ -39,6 +39,24 @@ use fem_mesh::amr::{refine_uniform, NCState, zz_estimator, dorfler_mark, prolong
 use fem_solver::{solve_pcg_jacobi, SolverConfig};
 use fem_space::{H1Space, fe_space::FESpace, constraints::{apply_dirichlet, apply_hanging_constraints, recover_hanging_values, boundary_dofs}};
 
+struct LevelResult {
+    level: usize,
+    n_elems: usize,
+    n_dofs: usize,
+    l2_error: f64,
+    estimator_error: f64,
+    n_marked: usize,
+    n_hanging: usize,
+}
+
+struct RunResult {
+    n0: usize,
+    levels: usize,
+    theta: f64,
+    nonconforming: bool,
+    levels_data: Vec<LevelResult>,
+}
+
 fn main() {
     let args = parse_args();
     println!("=== fem-rs Example 15: Poisson + Mesh Refinement with Error Estimation ===");
@@ -46,6 +64,48 @@ fn main() {
     println!("  Refinement levels: {}, Doerfler theta = {}", args.levels, args.theta);
     println!("  Mode: {}\n", if args.nonconforming { "non-conforming (hanging nodes)" } else { "conforming (uniform)" });
 
+    let result = run_case(args.n0, args.levels, args.theta, args.nonconforming);
+    println!(
+        "  Confirmed run: n0 = {}, levels = {}, theta = {:.2}, mode = {}",
+        result.n0,
+        result.levels,
+        result.theta,
+        if result.nonconforming { "non-conforming" } else { "conforming" }
+    );
+
+    println!("{:>5}  {:>8}  {:>8}  {:>12}  {:>12}  {:>8}  {:>6}  {:>8}",
+             "Level", "Elems", "DOFs", "L2 error", "Est. error", "Marked", "Hang", "Ratio");
+    println!("{}", "-".repeat(82));
+
+    let mut prev_l2: Option<f64> = None;
+    for level in &result.levels_data {
+        let ratio = match prev_l2 {
+            Some(prev) => format!("{:.2}", prev / level.l2_error),
+            None => "  --".to_string(),
+        };
+        println!(
+            "{:>5}  {:>8}  {:>8}  {:>12.4e}  {:>12.4e}  {:>8}  {:>6}  {:>8}",
+            level.level,
+            level.n_elems,
+            level.n_dofs,
+            level.l2_error,
+            level.estimator_error,
+            level.n_marked,
+            level.n_hanging,
+            ratio,
+        );
+        prev_l2 = Some(level.l2_error);
+    }
+
+    println!("\n  Final DOFs: {}, final L2 error = {:.4e}",
+        result.levels_data.last().map(|level| level.n_dofs).unwrap_or(0),
+        result.levels_data.last().map(|level| level.l2_error).unwrap_or(0.0));
+
+    println!("  Expected convergence rate: O(h^2) for P1 elements (ratio -> 4.0)");
+    println!("\nDone.");
+}
+
+fn run_case(n0: usize, levels: usize, theta: f64, nonconforming: bool) -> RunResult {
     let u_exact = |x: &[f64]| -> f64 {
         (PI * x[0]).sin() * (PI * x[1]).sin()
     };
@@ -54,17 +114,14 @@ fn main() {
         2.0 * PI * PI * (PI * x[0]).sin() * (PI * x[1]).sin()
     };
 
-    println!("{:>5}  {:>8}  {:>8}  {:>12}  {:>12}  {:>8}  {:>6}  {:>8}",
-             "Level", "Elems", "DOFs", "L2 error", "Est. error", "Marked", "Hang", "Ratio");
-    println!("{}", "-".repeat(82));
-
-    let mut mesh = SimplexMesh::<2>::unit_square_tri(args.n0);
+    let mut mesh = SimplexMesh::<2>::unit_square_tri(n0);
     let mut prev_l2: Option<f64> = None;
     let mut hanging_constraints = Vec::new();
     let mut nc_state = NCState::new();
     let mut prev_u: Option<Vec<f64>> = None;
+    let mut levels_data = Vec::new();
 
-    for level in 0..=args.levels {
+    for level in 0..=levels {
         // ─── 1. Build H1 space on current mesh ─────────────────────────
         let space = H1Space::new(mesh.clone(), 1);
         let n = space.n_dofs();
@@ -79,7 +136,7 @@ fn main() {
 
         // ─── 3. Apply constraints ──────────────────────────────────────
         // Hanging-node constraints FIRST (before Dirichlet).
-        if args.nonconforming {
+        if nonconforming {
             apply_hanging_constraints(&mut mat, &mut rhs, &hanging_constraints);
         }
 
@@ -113,7 +170,7 @@ fn main() {
         let _res = res.unwrap();
 
         // ─── 4b. Recover hanging DOF values (NC mode) ──────────────────
-        if args.nonconforming {
+        if nonconforming {
             recover_hanging_values(&mut u, &hanging_constraints);
         }
 
@@ -123,22 +180,25 @@ fn main() {
         // ─── 6. ZZ error estimator + Doerfler marking ──────────────────
         let eta = zz_estimator(&mesh, &u);
         let est_err: f64 = eta.iter().map(|e| e * e).sum::<f64>().sqrt();
-        let marked = dorfler_mark(&eta, args.theta);
+        let marked = dorfler_mark(&eta, theta);
         let n_marked = marked.len();
 
-        // Convergence ratio (should approach ~4 for h-refinement with P1)
-        let ratio = match prev_l2 {
-            Some(prev) => format!("{:.2}", prev / l2_err),
-            None => "  --".to_string(),
-        };
         prev_l2 = Some(l2_err);
 
         let n_hang = hanging_constraints.len();
 
-        println!("{level:>5}  {n_elems:>8}  {n:>8}  {l2_err:>12.4e}  {est_err:>12.4e}  {n_marked:>8}  {n_hang:>6}  {ratio:>8}");
+        levels_data.push(LevelResult {
+            level,
+            n_elems,
+            n_dofs: n,
+            l2_error: l2_err,
+            estimator_error: est_err,
+            n_marked,
+            n_hanging: n_hang,
+        });
 
-        if level < args.levels {
-            if args.nonconforming {
+        if level < levels {
+            if nonconforming {
                 let (new_mesh, new_constraints, midpt_map) = nc_state.refine(&mesh, &marked);
                 prev_u = Some(prolongate_p1(&u, new_mesh.n_nodes(), &midpt_map));
                 mesh = new_mesh;
@@ -151,8 +211,15 @@ fn main() {
         }
     }
 
-    println!("\n  Expected convergence rate: O(h^2) for P1 elements (ratio -> 4.0)");
-    println!("\nDone.");
+    let _ = prev_l2;
+
+    RunResult {
+        n0,
+        levels,
+        theta,
+        nonconforming,
+        levels_data,
+    }
 }
 
 // ─── L2 error for H1 solutions ──────────────────────────────────────────────
@@ -219,5 +286,67 @@ fn parse_args() -> Args {
         }
     }
     a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ex15_conforming_refinement_monotonically_reduces_true_error() {
+        let result = run_case(4, 3, 0.5, false);
+        assert_eq!(result.n0, 4);
+        assert_eq!(result.levels, 3);
+        assert!((result.theta - 0.5).abs() < 1.0e-12);
+        assert!(!result.nonconforming);
+        assert_eq!(result.levels_data.len(), 4);
+        for pair in result.levels_data.windows(2) {
+            assert!(pair[1].l2_error < pair[0].l2_error,
+                "true error should decrease under uniform refinement: prev={} next={}",
+                pair[0].l2_error,
+                pair[1].l2_error);
+            assert!(pair[1].estimator_error < pair[0].estimator_error,
+                "estimator should decrease under uniform refinement: prev={} next={}",
+                pair[0].estimator_error,
+                pair[1].estimator_error);
+        }
+    }
+
+    #[test]
+    fn ex15_conforming_refinement_approaches_second_order_gain() {
+        let result = run_case(4, 4, 0.5, false);
+        let levels = &result.levels_data;
+        let ratio_12 = levels[1].l2_error / levels[2].l2_error;
+        let ratio_23 = levels[2].l2_error / levels[3].l2_error;
+        let ratio_34 = levels[3].l2_error / levels[4].l2_error;
+        assert!(ratio_12 > 3.5, "level-1 to level-2 gain too small: {}", ratio_12);
+        assert!(ratio_23 > 3.8, "level-2 to level-3 gain too small: {}", ratio_23);
+        assert!(ratio_34 > 3.9, "level-3 to level-4 gain too small: {}", ratio_34);
+    }
+
+    #[test]
+    fn ex15_nonconforming_mode_creates_hanging_nodes_and_reduces_error() {
+        let result = run_case(4, 3, 0.5, true);
+        assert!(result.nonconforming);
+        assert_eq!(result.levels_data.len(), 4);
+        assert_eq!(result.levels_data[0].n_hanging, 0);
+        assert!(result.levels_data.iter().skip(1).any(|level| level.n_hanging > 0),
+            "nonconforming refinement should introduce hanging constraints");
+        for pair in result.levels_data.windows(2) {
+            assert!(pair[1].l2_error < pair[0].l2_error,
+                "true error should decrease in nonconforming mode: prev={} next={}",
+                pair[0].l2_error,
+                pair[1].l2_error);
+        }
+    }
+
+    #[test]
+    fn ex15_marking_selects_nonzero_subset_each_level() {
+        let result = run_case(4, 3, 0.5, false);
+        for level in &result.levels_data {
+            assert!(level.n_marked > 0, "each level should mark at least one element");
+            assert!(level.n_marked < level.n_elems, "Doerfler marking should not mark every element on these calibrated levels");
+        }
+    }
 }
 

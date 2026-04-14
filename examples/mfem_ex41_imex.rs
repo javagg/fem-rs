@@ -45,6 +45,29 @@ struct AdvectionDiffusionSplit {
     bc_dofs: Vec<u32>,
 }
 
+struct MethodResult {
+    final_time: f64,
+    error: f64,
+    solution_norm: f64,
+    checksum: f64,
+    dt_last: Option<f64>,
+}
+
+struct SolveResult {
+    n: usize,
+    dt: f64,
+    t_end: f64,
+    kappa: f64,
+    vx: f64,
+    vy: f64,
+    n_dofs: usize,
+    reference_norm: f64,
+    euler: MethodResult,
+    ssp2: MethodResult,
+    rk3: MethodResult,
+    ark3: MethodResult,
+}
+
 impl ImexOperator for AdvectionDiffusionSplit {
     fn explicit(&self, _t: f64, u: &[f64], out: &mut [f64]) {
         self.minv_c.spmv(u, out);
@@ -78,10 +101,51 @@ fn main() {
     println!("  mesh n={}, dt={}, T={}", args.n, args.dt, args.t_end);
     println!("  kappa={}, velocity=({}, {})", args.kappa, args.vx, args.vy);
 
+    let result = solve_case(&args);
+
+    println!("  confirmed dofs={}", result.n_dofs);
+    println!(
+        "  params: n={}, dt={}, T={}, kappa={}, velocity=({}, {})",
+        result.n,
+        result.dt,
+        result.t_end,
+        result.kappa,
+        result.vx,
+        result.vy,
+    );
+    println!("  ||u_ref||_2 = {:.3e}", result.reference_norm);
+    print_method("Euler", &result.euler);
+    print_method("SSP2", &result.ssp2);
+    print_method("RK3", &result.rk3);
+    print_method("ARK3", &result.ark3);
+
+    assert!(
+        result.euler.error.is_finite()
+            && result.ssp2.error.is_finite()
+            && result.rk3.error.is_finite()
+            && result.ark3.error.is_finite(),
+        "non-finite error detected"
+    );
+    assert!(
+        result.rk3.error <= result.euler.error,
+        "RK3 should be more accurate than Euler: rk3={:.3e}, euler={:.3e}",
+        result.rk3.error,
+        result.euler.error,
+    );
+    assert!(
+        result.ark3.error <= result.rk3.error * 1.2,
+        "ARK3 should be comparable to or better than RK3: ark3={:.3e}, rk3={:.3e}",
+        result.ark3.error,
+        result.rk3.error,
+    );
+
+    println!("  PASS");
+}
+
+fn solve_case(args: &Args) -> SolveResult {
     let mesh = SimplexMesh::<2>::unit_square_tri(args.n);
     let space = H1Space::new(mesh, 1);
-    let n = space.n_dofs();
-    println!("  dofs={n}");
+    let n_dofs = space.n_dofs();
 
     let mass = Assembler::assemble_bilinear(&space, &[&MassIntegrator { rho: 1.0 }], 3);
     let diff = Assembler::assemble_bilinear(&space, &[&DiffusionIntegrator { kappa: args.kappa }], 3);
@@ -97,7 +161,7 @@ fn main() {
     let mut m_bc = mass.clone();
     let mut k_bc = diff.clone();
     let mut c_bc = conv.clone();
-    let mut dummy = vec![0.0f64; n];
+    let mut dummy = vec![0.0f64; n_dofs];
     let vals = vec![0.0f64; bnd.len()];
     apply_dirichlet(&mut m_bc, &mut dummy, &bnd, &vals);
     apply_dirichlet(&mut k_bc, &mut dummy, &bnd, &vals);
@@ -114,9 +178,10 @@ fn main() {
         bc_dofs: bnd.clone(),
     };
 
-    let u0 = initial_condition(dm, n, &bnd);
+    let u0 = initial_condition(dm, n_dofs, &bnd);
 
     let u_ref = rk4_reference(&split, &u0, args.t_end, args.dt.min(1.0e-4));
+    let reference_norm = vector_norm(&u_ref);
 
     let imex_driver = ImexTimeStepper;
 
@@ -133,22 +198,20 @@ fn main() {
     let ark3 = ImexArk3 { rtol: 1e-6, atol: 1e-9, dt_min: 1e-10, dt_max: args.dt, ..Default::default() };
     let (t_a, dt_last) = imex_driver.integrate_ark3(&split, 0.0, args.t_end, &mut u_ark3, args.dt, &ark3);
 
-    let err_e = l2_error(&u_euler, &u_ref);
-    let err_s = l2_error(&u_ssp2, &u_ref);
-    let err_r = l2_error(&u_rk3, &u_ref);
-    let err_a = l2_error(&u_ark3, &u_ref);
-
-    println!("  final times: Euler={:.6}, SSP2={:.6}, RK3={:.6}, ARK3={:.6} (ark dt_last={:.3e})", t_e, t_s, t_r, t_a, dt_last);
-    println!("  ||u_euler - u_ref||_2 = {:.3e}", err_e);
-    println!("  ||u_ssp2  - u_ref||_2 = {:.3e}", err_s);
-    println!("  ||u_rk3   - u_ref||_2 = {:.3e}", err_r);
-    println!("  ||u_ark3  - u_ref||_2 = {:.3e}", err_a);
-
-    assert!(err_e.is_finite() && err_s.is_finite() && err_a.is_finite(), "non-finite error detected");
-    assert!(err_s <= err_e * 1.05, "SSP2 should not be worse than Euler by much: euler={err_e:.3e}, ssp2={err_s:.3e}");
-    assert!(err_r <= err_s * 1.05, "RK3 should be at least comparable to SSP2: rk3={err_r:.3e}, ssp2={err_s:.3e}");
-
-    println!("  PASS");
+    SolveResult {
+        n: args.n,
+        dt: args.dt,
+        t_end: args.t_end,
+        kappa: args.kappa,
+        vx: args.vx,
+        vy: args.vy,
+        n_dofs,
+        reference_norm,
+        euler: build_method_result(&u_euler, &u_ref, t_e, None),
+        ssp2: build_method_result(&u_ssp2, &u_ref, t_s, None),
+        rk3: build_method_result(&u_rk3, &u_ref, t_r, None),
+        ark3: build_method_result(&u_ark3, &u_ref, t_a, Some(dt_last)),
+    }
 }
 
 fn rk4_reference(op: &AdvectionDiffusionSplit, u0: &[f64], t_end: f64, dt_ref: f64) -> Vec<f64> {
@@ -194,6 +257,41 @@ fn l2_error(a: &[f64], b: &[f64]) -> f64 {
         s += d * d;
     }
     (s / n).sqrt()
+}
+
+fn vector_norm(values: &[f64]) -> f64 {
+    values.iter().map(|value| value * value).sum::<f64>().sqrt()
+}
+
+fn checksum(values: &[f64]) -> f64 {
+    values
+        .iter()
+        .enumerate()
+        .map(|(i, value)| (i as f64 + 1.0) * value)
+        .sum::<f64>()
+}
+
+fn build_method_result(solution: &[f64], reference: &[f64], final_time: f64, dt_last: Option<f64>) -> MethodResult {
+    MethodResult {
+        final_time,
+        error: l2_error(solution, reference),
+        solution_norm: vector_norm(solution),
+        checksum: checksum(solution),
+        dt_last,
+    }
+}
+
+fn print_method(name: &str, result: &MethodResult) {
+    println!(
+        "  {name}: t_final={:.6}, err={:.3e}, ||u||_2={:.3e}, checksum={:.8e}",
+        result.final_time,
+        result.error,
+        result.solution_norm,
+        result.checksum,
+    );
+    if let Some(dt_last) = result.dt_last {
+        println!("    {name} last dt = {:.3e}", dt_last);
+    }
 }
 
 fn mass_inverse_times(m: &CsrMatrix<f64>, a: &CsrMatrix<f64>, cfg: &SolverConfig) -> CsrMatrix<f64> {
@@ -266,5 +364,58 @@ fn parse_args() -> Args {
         }
     }
     a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ex41_imex_default_case_preserves_expected_method_ordering() {
+        let args = Args { n: 8, dt: 0.01, t_end: 0.2, kappa: 0.01, vx: 1.0, vy: 0.3 };
+        let result = solve_case(&args);
+        assert_eq!(result.n_dofs, 81);
+        assert!((result.euler.final_time - result.t_end).abs() < 1.0e-12);
+        assert!((result.ark3.final_time - result.t_end).abs() < 1.0e-12);
+        assert!(result.euler.error < 8.0e-3, "Euler error too large: {}", result.euler.error);
+        assert!(result.ssp2.error < result.euler.error, "SSP2 should improve on Euler in the default case");
+        assert!(result.rk3.error < 1.0e-4, "RK3 should track the reference closely: {}", result.rk3.error);
+        assert!(result.ark3.error < result.rk3.error, "ARK3 should beat RK3 in the default case");
+    }
+
+    #[test]
+    fn ex41_imex_smaller_dt_improves_euler_and_rk3_accuracy() {
+        let coarse = solve_case(&Args { n: 8, dt: 0.02, t_end: 0.2, kappa: 0.01, vx: 1.0, vy: 0.3 });
+        let fine = solve_case(&Args { n: 8, dt: 0.005, t_end: 0.2, kappa: 0.01, vx: 1.0, vy: 0.3 });
+        assert!(fine.euler.error < coarse.euler.error * 0.5,
+            "Euler refinement gain too small: coarse={} fine={}", coarse.euler.error, fine.euler.error);
+        assert!(fine.rk3.error < coarse.rk3.error * 0.1,
+            "RK3 refinement gain too small: coarse={} fine={}", coarse.rk3.error, fine.rk3.error);
+        assert!(fine.ark3.error <= coarse.ark3.error * 1.1,
+            "adaptive ARK3 should remain at least as accurate when the user dt shrinks: coarse={} fine={}",
+            coarse.ark3.error,
+            fine.ark3.error);
+    }
+
+    #[test]
+    fn ex41_imex_pure_diffusion_limit_favors_high_order_methods() {
+        let result = solve_case(&Args { n: 8, dt: 0.01, t_end: 0.2, kappa: 0.01, vx: 0.0, vy: 0.0 });
+        assert!(result.euler.error < 5.0e-5, "Euler error too large in pure diffusion: {}", result.euler.error);
+        assert!(result.ssp2.error < result.euler.error * 1.0e-2,
+            "SSP2 should sharply improve in pure diffusion: euler={} ssp2={}", result.euler.error, result.ssp2.error);
+        assert!(result.rk3.error < 1.0e-8, "RK3 should be nearly exact in pure diffusion: {}", result.rk3.error);
+        assert!(result.ark3.error < 1.0e-8, "ARK3 should be nearly exact in pure diffusion: {}", result.ark3.error);
+    }
+
+    #[test]
+    fn ex41_imex_stronger_diffusion_keeps_high_order_schemes_accurate() {
+        let result = solve_case(&Args { n: 8, dt: 0.01, t_end: 0.2, kappa: 0.05, vx: 1.0, vy: 0.3 });
+        assert!(result.euler.error.is_finite() && result.ssp2.error.is_finite());
+        assert!(result.rk3.error < result.euler.error * 1.0e-2,
+            "RK3 should remain far more accurate under stronger diffusion: euler={} rk3={}", result.euler.error, result.rk3.error);
+        assert!(result.ark3.error < 1.0e-6,
+            "ARK3 error too large under stronger diffusion: {}", result.ark3.error);
+        assert!(result.ark3.dt_last.unwrap_or(result.dt) <= result.dt + 1.0e-12);
+    }
 }
 

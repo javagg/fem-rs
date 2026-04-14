@@ -55,6 +55,7 @@ struct CaseResult {
     final_residual: f64,
     converged: bool,
     solution_l2: f64,
+    solution_checksum: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -116,6 +117,7 @@ fn main() {
         result.converged
     );
     println!("  Solution ||u||_2 = {:.3e}", result.solution_l2);
+    println!("  checksum = {:.8e}", result.solution_checksum);
     let h = 1.0 / run.mesh_n as f64;
     println!("  h = {h:.4e}  (expected O(h) error for ND1)");
     println!("=== Done ===");
@@ -194,6 +196,16 @@ fn solve_case(run: RunArgs) -> CaseResult {
         };
 
         let solution_l2 = u.global_norm();
+        let dof_part = par_space.dof_partition();
+        let local_checksum: f64 = u.owned_slice()
+            .iter()
+            .enumerate()
+            .map(|(lid, value)| {
+                let gid = dof_part.global_dof(lid as u32) as f64 + 1.0;
+                gid * value
+            })
+            .sum();
+        let solution_checksum = comm.allreduce_sum_f64(local_checksum);
 
         if rank == 0 {
             let mut guard = out_closure.lock().expect("lock case result");
@@ -203,6 +215,7 @@ fn solve_case(run: RunArgs) -> CaseResult {
                 final_residual: res.final_residual,
                 converged: res.converged,
                 solution_l2,
+                solution_checksum,
             });
         }
     });
@@ -283,6 +296,7 @@ mod tests {
         assert!(r.final_residual < 1e-7, "residual too large: {}", r.final_residual);
         assert!(r.n_global_dofs > 0);
         assert!(r.solution_l2.is_finite() && r.solution_l2 > 0.0);
+        assert!(r.solution_checksum.is_finite() && r.solution_checksum.abs() > 1.0);
     }
 
     #[test]
@@ -316,7 +330,16 @@ mod tests {
     }
 
     #[test]
-    fn pex3_maxwell_solution_is_stable_across_worker_partitions() {
+    fn pex3_maxwell_solution_is_stable_across_one_two_and_four_worker_partitions() {
+        let one_rank = solve_case(RunArgs {
+            n_workers: 1,
+            mesh_n: 8,
+            solver: SolverKind::Jacobi,
+            has_pml: false,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            source_scale: 1.0,
+        });
         let two_ranks = solve_case(RunArgs {
             n_workers: 2,
             mesh_n: 8,
@@ -326,8 +349,8 @@ mod tests {
             sigma_max: 2.0,
             source_scale: 1.0,
         });
-        let three_ranks = solve_case(RunArgs {
-            n_workers: 3,
+        let four_ranks = solve_case(RunArgs {
+            n_workers: 4,
             mesh_n: 8,
             solver: SolverKind::Jacobi,
             has_pml: false,
@@ -336,13 +359,32 @@ mod tests {
             source_scale: 1.0,
         });
 
-        assert!(two_ranks.converged && three_ranks.converged);
-        assert_eq!(two_ranks.n_global_dofs, three_ranks.n_global_dofs);
+        assert!(one_rank.converged && two_ranks.converged && four_ranks.converged);
+        assert_eq!(one_rank.n_global_dofs, two_ranks.n_global_dofs);
+        assert_eq!(one_rank.n_global_dofs, four_ranks.n_global_dofs);
         assert!(
-            rel_diff(two_ranks.solution_l2, three_ranks.solution_l2) < 1.0e-8,
-            "expected partition-independent solution norm: ranks2={} ranks3={}",
+            rel_diff(one_rank.solution_l2, two_ranks.solution_l2) < 1.0e-8,
+            "expected partition-independent solution norm: ranks1={} ranks2={}",
+            one_rank.solution_l2,
             two_ranks.solution_l2,
-            three_ranks.solution_l2
+        );
+        assert!(
+            rel_diff(one_rank.solution_l2, four_ranks.solution_l2) < 1.0e-8,
+            "expected partition-independent solution norm: ranks1={} ranks4={}",
+            one_rank.solution_l2,
+            four_ranks.solution_l2
+        );
+        assert!(
+            rel_diff(one_rank.solution_checksum, two_ranks.solution_checksum) < 1.0e-8,
+            "expected partition-independent checksum: ranks1={} ranks2={}",
+            one_rank.solution_checksum,
+            two_ranks.solution_checksum
+        );
+        assert!(
+            rel_diff(one_rank.solution_checksum, four_ranks.solution_checksum) < 1.0e-8,
+            "expected partition-independent checksum: ranks1={} ranks4={}",
+            one_rank.solution_checksum,
+            four_ranks.solution_checksum
         );
     }
 
@@ -404,5 +446,64 @@ mod tests {
             "expected parallel Maxwell solution norm to scale linearly with source amplitude, got ratio {}",
             ratio
         );
+        let checksum_ratio = full.solution_checksum / half.solution_checksum;
+        assert!(
+            (checksum_ratio - 2.0).abs() < 1.0e-6,
+            "expected parallel Maxwell checksum to scale linearly with source amplitude, got ratio {}",
+            checksum_ratio
+        );
+    }
+
+    #[test]
+    fn pex3_maxwell_sign_reversed_source_flips_solution_checksum() {
+        let positive = solve_case(RunArgs {
+            n_workers: 2,
+            mesh_n: 8,
+            solver: SolverKind::Jacobi,
+            has_pml: false,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            source_scale: 1.0,
+        });
+        let negative = solve_case(RunArgs {
+            n_workers: 2,
+            mesh_n: 8,
+            solver: SolverKind::Jacobi,
+            has_pml: false,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            source_scale: -1.0,
+        });
+
+        assert!(positive.converged && negative.converged);
+        assert!((positive.solution_l2 - negative.solution_l2).abs() < 1.0e-10,
+            "solution norm should be sign-invariant: positive={} negative={}",
+            positive.solution_l2,
+            negative.solution_l2);
+        assert!((positive.solution_checksum + negative.solution_checksum).abs() < 1.0e-8,
+            "checksum should flip sign: positive={} negative={}",
+            positive.solution_checksum,
+            negative.solution_checksum);
+    }
+
+    #[test]
+    fn pex3_maxwell_zero_source_gives_trivial_solution() {
+        let zero = solve_case(RunArgs {
+            n_workers: 2,
+            mesh_n: 8,
+            solver: SolverKind::Jacobi,
+            has_pml: false,
+            pml_thickness: 0.2,
+            sigma_max: 2.0,
+            source_scale: 0.0,
+        });
+
+        assert!(zero.converged);
+        assert!(zero.solution_l2 < 1.0e-12,
+            "zero source should give trivial solution norm, got {}",
+            zero.solution_l2);
+        assert!(zero.solution_checksum.abs() < 1.0e-12,
+            "zero source should give trivial checksum, got {}",
+            zero.solution_checksum);
     }
 }

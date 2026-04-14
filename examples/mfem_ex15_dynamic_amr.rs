@@ -70,6 +70,19 @@ fn synthetic_field(mesh: &SimplexMesh<2>, cx: f64, cy: f64, sigma: f64) -> Vec<f
         .collect()
 }
 
+#[cfg(test)]
+fn run_roundtrip(n: usize, theta_refine: f64, field: &[f64]) -> (SimplexMesh<2>, SimplexMesh<2>, SimplexMesh<2>, Vec<f64>) {
+    let mesh0 = SimplexMesh::<2>::unit_square_tri(n);
+    let eta0 = zz_estimator(&mesh0, field);
+    let marked_refine = dorfler_mark(&eta0, theta_refine);
+    let (mesh1, tree) = refine_marked_with_tree(&mesh0, &marked_refine);
+    let u1 = prolongate_p1(field, mesh1.n_nodes(), &tree.midpoint_map);
+    let parents = tree.parents();
+    let mesh2 = derefine_marked(&mesh1, &tree, &parents);
+    let u2 = restrict_to_coarse_p1(&u1, mesh0.n_nodes());
+    (mesh0, mesh1, mesh2, u2)
+}
+
 struct Args {
     n: usize,
     theta_refine: f64,
@@ -93,5 +106,62 @@ fn parse_args() -> Args {
         }
     }
     a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ex15_refine_marking_grows_with_theta() {
+        let mesh = SimplexMesh::<2>::unit_square_tri(8);
+        let field = synthetic_field(&mesh, 0.35, 0.45, 0.08);
+        let eta = zz_estimator(&mesh, &field);
+
+        let marked_low = dorfler_mark(&eta, 0.2);
+        let marked_mid = dorfler_mark(&eta, 0.5);
+        let marked_high = dorfler_mark(&eta, 0.8);
+
+        assert!(!marked_low.is_empty(), "expected non-empty refine set for localized feature");
+        assert!(
+            marked_low.len() <= marked_mid.len() && marked_mid.len() <= marked_high.len(),
+            "expected Dörfler marking to be monotone in theta, got low={} mid={} high={}",
+            marked_low.len(),
+            marked_mid.len(),
+            marked_high.len()
+        );
+    }
+
+    #[test]
+    fn ex15_constant_field_survives_roundtrip() {
+        let mesh0 = SimplexMesh::<2>::unit_square_tri(8);
+        let u0 = vec![1.0; mesh0.n_nodes()];
+        let (mesh_coarse, mesh_refined, mesh_roundtrip, u2) = run_roundtrip(8, 0.5, &u0);
+
+        assert!(mesh_refined.n_elems() >= mesh_coarse.n_elems());
+        assert!(mesh_refined.n_nodes() >= mesh_coarse.n_nodes());
+        assert_eq!(mesh_roundtrip.n_elems(), mesh_coarse.n_elems());
+        assert_eq!(mesh_roundtrip.n_nodes(), mesh_coarse.n_nodes());
+
+        let max_error = u0
+            .iter()
+            .zip(&u2)
+            .map(|(expected, actual)| (expected - actual).abs())
+            .fold(0.0_f64, f64::max);
+        assert!(max_error < 1.0e-12, "constant field roundtrip error = {}", max_error);
+    }
+
+    #[test]
+    fn ex15_zero_field_roundtrip_stays_zero() {
+        let mesh0 = SimplexMesh::<2>::unit_square_tri(8);
+        let u0 = vec![0.0; mesh0.n_nodes()];
+        let (_, _, mesh_roundtrip, u2) = run_roundtrip(8, 0.5, &u0);
+
+        assert_eq!(u2.len(), mesh0.n_nodes());
+        assert_eq!(mesh_roundtrip.n_elems(), mesh0.n_elems());
+
+        let max_value = u2.iter().map(|value| value.abs()).fold(0.0_f64, f64::max);
+        assert!(max_value < 1.0e-14, "zero field should remain zero after roundtrip, got max {}", max_value);
+    }
 }
 
