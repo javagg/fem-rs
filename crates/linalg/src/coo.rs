@@ -76,26 +76,39 @@ impl<T: Scalar> CooMatrix<T> {
         let mut col_idx: Vec<u32> = Vec::with_capacity(nnz);
         let mut values: Vec<T>    = Vec::with_capacity(nnz);
 
-        let (mut prev_row, mut prev_col) = (u32::MAX, u32::MAX);
+        let mut prev: Option<(u32, u32)> = None;
 
         for &i in &idx {
-            let r = self.rows[i];
-            let c = self.cols[i];
+            let r = self.rows[i] as usize;
+            let c = self.cols[i] as usize;
             let v = self.vals[i];
-            if r == prev_row && c == prev_col {
-                *values.last_mut().unwrap() += v;
-            } else {
-                // Fill row_ptr for any skipped rows
-                if r != prev_row {
-                    for rr in (prev_row as usize + 1)..=(r as usize) {
-                        row_ptr[rr] = col_idx.len();
-                    }
+
+            assert!(r < self.nrows, "COO row index out of bounds: row={} nrows={}", r, self.nrows);
+            assert!(c < self.ncols, "COO col index out of bounds: col={} ncols={}", c, self.ncols);
+
+            let r_u32 = r as u32;
+            let c_u32 = c as u32;
+
+            if let Some((prev_row, prev_col)) = prev {
+                if r_u32 == prev_row && c_u32 == prev_col {
+                    *values.last_mut().unwrap() += v;
+                    continue;
                 }
-                col_idx.push(c);
-                values.push(v);
-                prev_row = r;
-                prev_col = c;
+
+                // Fill row_ptr for rows between the previous and current entry.
+                for rr in (prev_row as usize + 1)..=r {
+                    row_ptr[rr] = col_idx.len();
+                }
+            } else {
+                // First nonzero initializes row_ptr up to its row.
+                for rr in 0..=r {
+                    row_ptr[rr] = 0;
+                }
             }
+
+            col_idx.push(c_u32);
+            values.push(v);
+            prev = Some((r_u32, c_u32));
         }
         // Fill remaining rows
         let last_row = self.rows[*idx.last().unwrap()] as usize;
