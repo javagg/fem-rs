@@ -54,25 +54,25 @@ jobs:
           cp examples/mfem_ex43_hdf5_checkpoint.rs "${TMP_ROOT}/ex43_runner/src/main.rs"
 
           cat > "${TMP_ROOT}/Cargo.toml" <<'EOF'
-[workspace]
-resolver = "2"
-members = ["io_hdf5_parallel", "ex43_runner"]
+          [workspace]
+          resolver = "2"
+          members = ["io_hdf5_parallel", "ex43_runner"]
 
-[workspace.dependencies]
-thiserror = "2"
-serde = { version = "1", features = ["derive"] }
-mpi = { version = "0.8", features = ["user-operations"] }
-EOF
+          [workspace.dependencies]
+          thiserror = "2"
+          serde = { version = "1", features = ["derive"] }
+          mpi = { version = "0.8", features = ["user-operations"] }
+          EOF
 
           cat > "${TMP_ROOT}/ex43_runner/Cargo.toml" <<'EOF'
-[package]
-name = "ex43-runner"
-version = "0.1.0"
-edition = "2021"
+          [package]
+          name = "ex43-runner"
+          version = "0.1.0"
+          edition = "2021"
 
-[dependencies]
-fem-io-hdf5-parallel = { path = "../io_hdf5_parallel" }
-EOF
+          [dependencies]
+          fem-io-hdf5-parallel = { path = "../io_hdf5_parallel" }
+          EOF
 
           if [[ "${{ matrix.backend }}" == "partitioned" ]]; then
             cargo test --manifest-path "${TMP_ROOT}/io_hdf5_parallel/Cargo.toml" -- --nocapture
@@ -135,25 +135,25 @@ EOF
           cp examples/mfem_ex43_hdf5_checkpoint.rs "${TMP_ROOT}/ex43_runner/src/main.rs"
 
           cat > "${TMP_ROOT}/Cargo.toml" <<'EOF'
-[workspace]
-resolver = "2"
-members = ["io_hdf5_parallel", "ex43_runner"]
+          [workspace]
+          resolver = "2"
+          members = ["io_hdf5_parallel", "ex43_runner"]
 
-[workspace.dependencies]
-thiserror = "2"
-serde = { version = "1", features = ["derive"] }
-mpi = { version = "0.8", features = ["user-operations"] }
-EOF
+          [workspace.dependencies]
+          thiserror = "2"
+          serde = { version = "1", features = ["derive"] }
+          mpi = { version = "0.8", features = ["user-operations"] }
+          EOF
 
           cat > "${TMP_ROOT}/ex43_runner/Cargo.toml" <<'EOF'
-[package]
-name = "ex43-runner"
-version = "0.1.0"
-edition = "2021"
+          [package]
+          name = "ex43-runner"
+          version = "0.1.0"
+          edition = "2021"
 
-[dependencies]
-fem-io-hdf5-parallel = { path = "../io_hdf5_parallel" }
-EOF
+          [dependencies]
+          fem-io-hdf5-parallel = { path = "../io_hdf5_parallel" }
+          EOF
 
           if [[ "${{ matrix.backend }}" == "partitioned" ]]; then
             cargo test --manifest-path "${TMP_ROOT}/io_hdf5_parallel/Cargo.toml" -- --nocapture
