@@ -34,6 +34,7 @@
 
 ### 1.2 �?��?�?��?差距�?跨模�?�?
 
+<<<<<<< HEAD
 - �??� HDF5/XDMF 并�? I/O �?restart �??件�?�路�?checkpoint/restart �?�线已落�?��?direct HDF5 hyperslab �?��?�?�??�??�?baseline 已落�?��?�?HDF5/MPI �?��?端�?�端�?�?��?�?
 - �??� native-amg-hardening 路线�?纯 Rust �?��??轨�?�?`linger` �?AMS/ADS baseline 已可�?��?�?��?�?AIR �?�??�?式/�?�?��?��??补齐为主�?�?
 - �??� Netgen/Abaqus �?格读�?�?��?��?Netgen `.vol` Tet4/Hex8 ASCII uniform/mixed 读�?�?�线 + Abaqus `.inp` C3D4/C3D8 uniform/mixed 读�?�?�线已落�?��?�??�?��?�?��?section/tag 保�??�?补齐�?�?
@@ -50,6 +51,19 @@
 - �?`jsmpi` 依�?来源�?�?�?crates.io �??�?�?�?��?�?
   �?�?��?�?�?026-04-12�?�?`fem-parallel` �?`fem-wasm` 已�? `vendor/jsmpi` path/submodule 依�?�??换�?registry 依�? `jsmpi = "0.1.0"`�?并移�?��?�? `vendor/jsmpi` 子模�?�?踪�?
   �?�?�证据�?026-04-12�?�?`cargo check -p fem-parallel --target wasm32-unknown-unknown` �?`cargo check -p fem-wasm --target wasm32-unknown-unknown --features wasm-parallel` �??�?�?
+=======
+- ✅ HDF5/XDMF 并行 I/O 与 restart 文件链路（Phase 55, 2026-05-02）。
+  当前进展：`fem-io` 新增 `hdf5` 模块（串行 HDF5 网格+场读写，GZIP 压缩）与 `xdmf` 模块（XML 元数据生成，支持串行/并行）；`fem-parallel` 新增 `par_hdf5` 模块（PerRank/Gather 两种并行写入模式）与 `checkpoint` 模块（ParVector+ParCsrMatrix 分布式 checkpoint 保存恢复）。
+  验收证据：`cargo test -p fem-io --features hdf5` 全通过（18 unit + 7 integration）；`cargo check -p fem-parallel --features hdf5` 零错误。
+- 🔲 hypre 绑定（可选 FFI 路线）。
+- 🔲 Netgen/Abaqus 网格读取支持。
+- ✅ `ElementTransformation` 统一抽象层（完成）。
+  当前进展（2026-04-12）：`assembler`、`vector_assembler`、`mixed`、`vector_boundary` 的仿射 simplex 几何路径已统一切换到 `ElementTransformation`，不再在装配入口重复内联 `J/det(J)/J^{-T}/x(ξ)` 逻辑。
+  验收证据（2026-04-12）：`cargo test -p fem-assembly --lib` 通过（118 passed, 0 failed, 1 ignored）。
+- ✅ `jsmpi` 依赖来源统一为 crates.io 包（完成）。
+  当前进展（2026-04-12）：`fem-parallel` 与 `fem-wasm` 已从 `vendor/jsmpi` path/submodule 依赖切换为 registry 依赖 `jsmpi = "0.1.0"`，并移除仓库 `vendor/jsmpi` 子模块跟踪。
+  验收证据（2026-04-12）：`cargo check -p fem-parallel --target wasm32-unknown-unknown` 与 `cargo check -p fem-wasm --target wasm32-unknown-unknown --features wasm-parallel` 通过。
+>>>>>>> 20d3e1a (feat(phase55): HDF5 parallel I/O, XDMF metadata, and checkpoint)
 
 ---
 

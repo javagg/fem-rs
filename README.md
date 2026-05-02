@@ -11,6 +11,7 @@ extensibility, MPI/AMG parallelism, and WASM compilation.
 ```
 fem-rs/
 ├── crates/
+<<<<<<< HEAD
 �?  ├── core/       fem-core     �?scalar types, index aliases, FemError
 �?  ├── mesh/       fem-mesh     �?SimplexMesh<D>, AMR, NCMesh, CurvedMesh, periodic, generators
 �?  ├── element/    fem-element  �?Lagrange P1–P3 (Seg/Tri/Tet/Quad/Hex), Nedelec ND1, RT0, quadrature
@@ -23,6 +24,21 @@ fem-rs/
 �?  ├── io/         fem-io       �?GMSH .msh v2/v4 reader, VTK .vtu writer/reader, Matrix Market .mtx
 �?  ├── wasm/       fem-wasm     �?wasm-bindgen Poisson solver, multi-Worker parallel
 └── examples/       fem-examples �?MFEM-style examples + EM simulations + parallel examples
+=======
+│   ├── core/       fem-core     — scalar types, index aliases, FemError
+│   ├── mesh/       fem-mesh     — SimplexMesh<D>, AMR, NCMesh, CurvedMesh, periodic, generators
+│   ├── element/    fem-element  — Lagrange P1–P3 (Seg/Tri/Tet/Quad/Hex), Nedelec ND1, RT0, quadrature
+│   ├── space/      fem-space    — H1/L2/HCurl/HDiv/VectorH1/H1Trace spaces, DOF management, hanging nodes
+│   ├── assembly/   fem-assembly — bilinear/linear/mixed/DG/nonlinear/partial assembly, coefficients
+│   ├── linalg/     fem-linalg   — CsrMatrix, CooMatrix, Vector, BlockMatrix, DenseTensor
+│   ├── solver/     fem-solver   — CG/PCG/GMRES/BiCGSTAB/IDR(s)/TFQMR, direct solvers, LOBPCG/KrylovSchur, ODE
+│   ├── amg/        fem-amg      — SA-AMG + RS-AMG, Chebyshev smoother, V/W/F cycles (via linger)
+│   ├── parallel/   fem-parallel — thread/MPI backends, METIS partitioning, ghost exchange, WASM Workers
+│   ├── io/         fem-io       — GMSH .msh v2/v4 reader, VTK .vtu writer/reader, Matrix Market .mtx, HDF5 serial/parallel I/O, XDMF
+│   ├── wasm/       fem-wasm     — wasm-bindgen Poisson solver, multi-Worker parallel
+│   └── ceed/       fem-ceed     — libCEED-style partial assembly (matrix-free mass/diffusion)
+└── examples/       fem-examples — MFEM-style examples + EM simulations + parallel examples
+>>>>>>> 20d3e1a (feat(phase55): HDF5 parallel I/O, XDMF metadata, and checkpoint)
 ```
 
 ### MFEM-Style Examples
@@ -147,10 +163,11 @@ check-all  = "check --workspace --all-features"
 
 ## Implementation Status
 
-Phase 52 complete. 520+ tests passing across the workspace.
+Phase 55 complete. HDF5 parallel I/O, XDMF metadata, checkpoint serialization added.
 
 | Crate | Status | Highlights |
 |-------|--------|------------|
+<<<<<<< HEAD
 | `fem-core` | �?Complete | Scalar traits, FemError, NodeId/DofId, coord aliases |
 | `fem-mesh` | �?Complete | SimplexMesh, uniform/adaptive AMR, NCMesh (Tri3+Tet4 hanging constraints), CurvedMesh P2 isoparametric, periodic mesh, bounding box |
 | `fem-element` | �?Complete | Lagrange P1–P3 (Seg, Tri, Tet), Q1/Q2 (Quad), Q1 (Hex); Nédélec ND1/ND2 (Tri, Tet); Raviart-Thomas RT0/RT1 (Tri, Tet); Gauss/Lobatto/Grundmann-Moller quadrature |
@@ -163,3 +180,17 @@ Phase 52 complete. 520+ tests passing across the workspace.
 | `fem-parallel` | �?Complete | ChannelBackend (multi-thread), NativeMPI backend, GhostExchange, METIS k-way partitioning, streaming partition, WASM multi-Worker, RAS preconditioning (PCG/GMRES, overlap 0/1, Diag/ILU0 local solves) |
 | `fem-wasm` | �?Complete | WasmSolver (unit-square P1 Poisson), multi-Worker parallel solver, wasm-bindgen JS API |
 
+=======
+| `fem-core` | ✅ Complete | Scalar traits, FemError, NodeId/DofId, coord aliases |
+| `fem-mesh` | ✅ Complete | SimplexMesh, uniform/adaptive AMR, NCMesh (Tri3+Tet4 hanging constraints), CurvedMesh P2 isoparametric, periodic mesh, bounding box |
+| `fem-element` | ✅ Complete | Lagrange P1–P3 (Seg, Tri, Tet), Q1/Q2 (Quad), Q1 (Hex); Nédélec ND1/ND2 (Tri, Tet); Raviart-Thomas RT0/RT1 (Tri, Tet); Gauss/Lobatto/Grundmann-Moller quadrature |
+| `fem-linalg` | ✅ Complete | CsrMatrix, CooMatrix, Vector, SparsityPattern, dense LU, BlockMatrix/BlockVector, DenseTensor |
+| `fem-space` | ✅ Complete | H1Space (P1–P3), L2Space (P0/P1/P2), VectorH1Space, HCurlSpace (ND1/ND2, including 3D ND2 shared face DOFs), HDivSpace (RT0/RT1), H1TraceSpace (P1–P3), DOF manager, hanging-node constraints |
+| `fem-assembly` | ✅ Complete | Scalar + vector assemblers; 15+ integrators; MixedAssembler; SIP-DG; NonlinearForm + Newton; partial assembly (matrix-free); coefficient system (PWConst, GridFunction, composition); DiscreteLinearOperator supports ND2->L2(P2), RT1->L2(P2), and 3D high-order curl (ND2->RT1) with strict de Rham verification |
+| `fem-solver` | ✅ Complete | CG/PCG+Jacobi/ILU0/ILDLt, GMRES, BiCGSTAB, IDR(s), TFQMR, FGMRES; sparse direct: LU/Cholesky/LDLᵀ; LOBPCG + KrylovSchur; MINRES; Schur complement; ODE: Euler/RK4/RK45/SDIRK-2/BDF-2/Newmark-β/Generalized-α/IMEX-ARK3 |
+| `fem-amg` | ✅ Complete | SA-AMG + RS-AMG, Chebyshev smoother, V/W/F cycles, reusable hierarchy (via linger) |
+| `fem-io` | ✅ Complete | GMSH v2/v4.1 ASCII+binary reader; VTK .vtu XML writer + reader; Matrix Market .mtx reader/writer; HDF5 read/write (feature-gated); XDMF metadata generator |
+| `fem-parallel` | ✅ Complete | ChannelBackend (multi-thread), NativeMPI backend, GhostExchange, METIS k-way partitioning, streaming partition, WASM multi-Worker |
+| `fem-wasm` | ✅ Complete | WasmSolver (unit-square P1 Poisson), multi-Worker parallel solver, wasm-bindgen JS API |
+| `fem-ceed` | ✅ Complete | PA operators (mass, diffusion, lumped mass), MatFreeOperator trait |
+>>>>>>> 20d3e1a (feat(phase55): HDF5 parallel I/O, XDMF metadata, and checkpoint)
